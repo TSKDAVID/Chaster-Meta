@@ -1,4 +1,12 @@
-import { applyTheme, isThemeId, type ThemeId } from "@/lib/themes";
+import {
+  applyTheme,
+  DEFAULT_CUSTOM_COLORS,
+  isThemeId,
+  sanitizeCustomColors,
+  type CustomThemeColors,
+  type ThemeId,
+} from "@/lib/themes";
+import { normalizeLocale, type Locale } from "@/lib/i18n/locales";
 
 export const PREFS_KEY = "chaster_operator_prefs_v1";
 export const TOUR_DONE_KEY = "chaster_tour_done_v1";
@@ -6,11 +14,18 @@ export const TOUR_DONE_KEY = "chaster_tour_done_v1";
 export type OperatorPrefs = {
   defaultAiReplies: boolean;
   theme: ThemeId;
+  customColors: CustomThemeColors;
+  locale: Locale;
+  /** Hover help tips on switches and key controls. */
+  showHints: boolean;
 };
 
 export const defaultPrefs: OperatorPrefs = {
   defaultAiReplies: true,
   theme: "slate",
+  customColors: DEFAULT_CUSTOM_COLORS,
+  locale: "en",
+  showHints: true,
 };
 
 type PrefsCacheV2 = {
@@ -31,6 +46,12 @@ function sanitizePrefs(parsed: Partial<OperatorPrefs> | null | undefined): Opera
         ? parsed.defaultAiReplies
         : defaultPrefs.defaultAiReplies,
     theme: isThemeId(parsed?.theme) ? parsed.theme : defaultPrefs.theme,
+    customColors: sanitizeCustomColors(parsed?.customColors),
+    locale: normalizeLocale(parsed?.locale),
+    showHints:
+      typeof parsed?.showHints === "boolean"
+        ? parsed.showHints
+        : defaultPrefs.showHints,
   };
 }
 
@@ -55,7 +76,6 @@ function readCache(): PrefsCacheV2 {
       };
     }
 
-    // Migrate flat v1 shape → per-account cache
     const legacy = sanitizePrefs(parsed as Partial<OperatorPrefs>);
     return {
       v: 2,
@@ -84,9 +104,10 @@ export function savePrefs(prefs: OperatorPrefs, accountId?: string | null) {
   const id = normalizeAccountId(accountId);
   const cache = readCache();
   cache.lastAccountId = id;
-  cache.byAccount[id] = sanitizePrefs(prefs);
+  const next = sanitizePrefs(prefs);
+  cache.byAccount[id] = next;
   writeCache(cache);
-  applyTheme(prefs.theme);
+  applyTheme(next.theme, next.customColors);
 }
 
 export async function fetchAccountPrefs(
@@ -121,6 +142,9 @@ export async function persistAccountPrefs(
       facebook_user_id: id,
       theme: next.theme,
       defaultAiReplies: next.defaultAiReplies,
+      customColors: next.customColors,
+      locale: next.locale,
+      showHints: next.showHints,
     }),
   });
   const data = await res.json();

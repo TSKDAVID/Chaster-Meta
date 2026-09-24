@@ -157,13 +157,19 @@ export function isCapacityConflictError(error: {
  * - With resourceId → bookings where that unit is primary OR assigned,
  *   plus null-resource (legacy) bookings that block everyone.
  */
-async function loadBusyRanges(
+type BusyRow = {
+  starts: Date;
+  ends: Date;
+  resource_id: string | null;
+  assigned_resource_id: string | null;
+};
+
+async function loadBusyRows(
   pageId: string,
   fromIso: string,
   toIso: string,
   excludeBookingId?: string | null,
-  resourceId?: string | null,
-): Promise<Array<{ starts: Date; ends: Date }>> {
+): Promise<BusyRow[]> {
   const supabase = getSupabaseAdmin();
   const { data } = await supabase
     .from("messenger_bookings")
@@ -177,16 +183,37 @@ async function loadBusyRanges(
   return (data ?? [])
     .filter((row) => row.status !== "cancelled")
     .filter((row) => !excludeBookingId || row.id !== excludeBookingId)
-    .filter((row) => {
-      if (!resourceId) return true;
-      const rid = (row.resource_id as string | null) ?? null;
-      const aid = (row.assigned_resource_id as string | null) ?? null;
-      return rid === null || rid === resourceId || aid === resourceId;
-    })
     .map((row) => ({
       starts: new Date(row.starts_at as string),
       ends: new Date(row.ends_at as string),
+      resource_id: (row.resource_id as string | null) ?? null,
+      assigned_resource_id: (row.assigned_resource_id as string | null) ?? null,
     }));
+}
+
+function busyForResource(
+  rows: BusyRow[],
+  resourceId?: string | null,
+): Array<{ starts: Date; ends: Date }> {
+  return rows
+    .filter((row) => {
+      if (!resourceId) return true;
+      const rid = row.resource_id;
+      const aid = row.assigned_resource_id;
+      return rid === null || rid === resourceId || aid === resourceId;
+    })
+    .map((row) => ({ starts: row.starts, ends: row.ends }));
+}
+
+async function loadBusyRanges(
+  pageId: string,
+  fromIso: string,
+  toIso: string,
+  excludeBookingId?: string | null,
+  resourceId?: string | null,
+): Promise<Array<{ starts: Date; ends: Date }>> {
+  const rows = await loadBusyRows(pageId, fromIso, toIso, excludeBookingId);
+  return busyForResource(rows, resourceId);
 }
 
 function hoursForResource(
@@ -400,14 +427,13 @@ export type AvailabilityResult = {
 };
 
 /** True if this capacity unit is free for the interval. */
-async function checkResourceInterval(input: {
-  pageId: string;
+function isResourceIntervalFree(input: {
   settings: BookingSettings;
   resource: BookableResource;
   starts: Date;
   ends: Date;
-  excludeBookingId?: string | null;
-}): Promise<boolean> {
+  busy: Array<{ starts: Date; ends: Date }>;
+}): boolean {
   const hours = hoursForResource(input.settings, input.resource);
   if (
     !isOpenOnDates(
@@ -429,14 +455,7 @@ async function checkResourceInterval(input: {
   ) {
     return false;
   }
-  const busy = await loadBusyRanges(
-    input.pageId,
-    input.starts.toISOString(),
-    input.ends.toISOString(),
-    input.excludeBookingId,
-    input.resource.id,
-  );
-  return !busy.some((b) =>
+  return !input.busy.some((b) =>
     overlaps(
       input.starts,
       input.ends,
@@ -447,12 +466,6 @@ async function checkResourceInterval(input: {
   );
 }
 
-/**
- * Resolve primary resource → first free capacity unit.
- * Services with linked staff are free if any assigned person is working and
- * free. Rooms and equipment describe where a service can happen; they never
- * substitute for the staff member who performs it.
- */
 async function findFreeAssignment(input: {
   pageId: string;
   settings: BookingSettings;
@@ -461,6 +474,8 @@ async function findFreeAssignment(input: {
   starts: Date;
   ends: Date;
   excludeBookingId?: string | null;
+  /** Preloaded page busy rows for this interval (avoids N queries). */
+  busyRows?: BusyRow[];
 }): Promise<{
   primary: BookableResource;
   capacity: BookableResource;
@@ -472,6 +487,15 @@ async function findFreeAssignment(input: {
     close_time: input.settings.close_time,
     open_days: input.settings.open_days,
   };
+  const busyRows =
+    input.busyRows ??
+    (await loadBusyRows(
+      input.pageId,
+      input.starts.toISOString(),
+      input.ends.toISOString(),
+      input.excludeBookingId,
+    ));
+
   for (const unit of units) {
     const effective =
       input.primary.id === unit.id
@@ -509,13 +533,12 @@ async function findFreeAssignment(input: {
     ) {
       continue;
     }
-    const free = await checkResourceInterval({
-      pageId: input.pageId,
+    const free = isResourceIntervalFree({
       settings: input.settings,
       resource: unit,
       starts: input.starts,
       ends: input.ends,
-      excludeBookingId: input.excludeBookingId,
+      busy: busyForResource(busyRows, unit.id),
     });
     if (free) {
       return { primary: input.primary, capacity: unit };
@@ -546,8 +569,14 @@ export async function checkAvailability(input: {
   excludeBookingId?: string | null;
   /** Pin a specific resource; omit for any-available when resources exist. */
   resourceId?: string | null;
+  /**
+   * When false, skip computing free_slots (desk save path).
+   * Defaults true so AI tools still get alternatives on conflict.
+   */
+  includeFreeSlots?: boolean;
 }): Promise<AvailabilityResult> {
   const { settings } = input;
+  const wantSlots = input.includeFreeSlots !== false;
   if (!settings.enabled) {
     return {
       ok: false,
@@ -579,6 +608,17 @@ export async function checkAvailability(input: {
 
   const resources = await loadActiveResources(input.pageId);
   const requested = `${formatInZone(range.starts, settings.timezone)} → ${formatInZone(range.ends, settings.timezone)}`;
+  const slotSuggest = async (resourceId: string | null) =>
+    wantSlots && settings.booking_mode === "hourly"
+      ? await listFreeSlotLabels(
+          input.pageId,
+          settings,
+          input.date,
+          input.excludeBookingId,
+          resourceId,
+          resources,
+        )
+      : undefined;
 
   // Legacy: no active resources → page-level calendar
   if (resources.length === 0) {
@@ -606,13 +646,7 @@ export async function checkAvailability(input: {
         mode: settings.booking_mode,
         message: `That time is outside open hours (${settings.open_time}–${settings.close_time} ${settings.timezone}).`,
         requested: formatInZone(range.starts, settings.timezone),
-        free_slots: await listFreeSlotLabels(
-          input.pageId,
-          settings,
-          input.date,
-          input.excludeBookingId,
-          null,
-        ),
+        free_slots: await slotSuggest(null),
       };
     }
 
@@ -633,13 +667,7 @@ export async function checkAvailability(input: {
         mode: settings.booking_mode,
         message: "That slot is already taken.",
         requested,
-        free_slots: await listFreeSlotLabels(
-          input.pageId,
-          settings,
-          input.date,
-          input.excludeBookingId,
-          null,
-        ),
+        free_slots: await slotSuggest(null),
       };
     }
 
@@ -649,18 +677,15 @@ export async function checkAvailability(input: {
       mode: settings.booking_mode,
       message: "Slot is free.",
       requested,
-      free_slots:
-        settings.booking_mode === "hourly"
-          ? await listFreeSlotLabels(
-              input.pageId,
-              settings,
-              input.date,
-              input.excludeBookingId,
-              null,
-            )
-          : undefined,
     };
   }
+
+  const intervalBusy = await loadBusyRows(
+    input.pageId,
+    range.starts.toISOString(),
+    range.ends.toISOString(),
+    input.excludeBookingId,
+  );
 
   // Specific resource (may be a service with linked staff)
   if (input.resourceId) {
@@ -681,6 +706,7 @@ export async function checkAvailability(input: {
       starts: range.starts,
       ends: range.ends,
       excludeBookingId: input.excludeBookingId,
+      busyRows: intervalBusy,
     });
     if (!assignment) {
       const hours = hoursForResource(settings, resource);
@@ -695,13 +721,7 @@ export async function checkAvailability(input: {
         requested,
         resource_id: resource.id,
         resource_name: resource.name,
-        free_slots: await listFreeSlotLabels(
-          input.pageId,
-          settings,
-          input.date,
-          input.excludeBookingId,
-          resource.id,
-        ),
+        free_slots: await slotSuggest(resource.id),
       };
     }
     const fields = assignmentFields(assignment);
@@ -714,16 +734,6 @@ export async function checkAvailability(input: {
         : `${resource.name} is free.`,
       requested,
       ...fields,
-      free_slots:
-        settings.booking_mode === "hourly"
-          ? await listFreeSlotLabels(
-              input.pageId,
-              settings,
-              input.date,
-              input.excludeBookingId,
-              resource.id,
-            )
-          : undefined,
     };
   }
 
@@ -737,6 +747,7 @@ export async function checkAvailability(input: {
       starts: range.starts,
       ends: range.ends,
       excludeBookingId: input.excludeBookingId,
+      busyRows: intervalBusy,
     });
     if (assignment) {
       const fields = assignmentFields(assignment);
@@ -749,16 +760,6 @@ export async function checkAvailability(input: {
           : `Slot is free (will assign ${fields.resource_name}).`,
         requested,
         ...fields,
-        free_slots:
-          settings.booking_mode === "hourly"
-            ? await listFreeSlotLabels(
-                input.pageId,
-                settings,
-                input.date,
-                input.excludeBookingId,
-                null,
-              )
-            : undefined,
       };
     }
   }
@@ -769,13 +770,7 @@ export async function checkAvailability(input: {
     mode: settings.booking_mode,
     message: "No resource is free at that time.",
     requested,
-    free_slots: await listFreeSlotLabels(
-      input.pageId,
-      settings,
-      input.date,
-      input.excludeBookingId,
-      null,
-    ),
+    free_slots: await slotSuggest(null),
   };
 }
 
@@ -786,10 +781,11 @@ async function listFreeSlotLabels(
   excludeBookingId?: string | null,
   /** null/undefined = any-available (or legacy); string = that resource only */
   resourceId?: string | null,
+  preloadedResources?: BookableResource[],
 ): Promise<string[]> {
   if (settings.booking_mode !== "hourly") return [];
 
-  const resources = await loadActiveResources(pageId);
+  const resources = preloadedResources ?? (await loadActiveResources(pageId));
   const useResources = resources.length > 0;
   const scoped = useResources
     ? resourceId
@@ -835,13 +831,16 @@ async function listFreeSlotLabels(
   const closeMin = close.h * 60 + close.m;
   const free: string[] = [];
 
+  // One busy fetch for the whole day — reuse across every slot / resource check
+  const dayBusy = await loadBusyRows(
+    pageId,
+    dayStart.toISOString(),
+    dayEnd.toISOString(),
+    excludeBookingId,
+  );
+
   if (!useResources) {
-    const busy = await loadBusyRanges(
-      pageId,
-      dayStart.toISOString(),
-      dayEnd.toISOString(),
-      excludeBookingId,
-    );
+    const busy = busyForResource(dayBusy, null);
     let cursor = open.h * 60 + open.m;
     while (cursor + step <= closeMin) {
       const hh = String(Math.floor(cursor / 60)).padStart(2, "0");
@@ -878,6 +877,7 @@ async function listFreeSlotLabels(
           starts,
           ends,
           excludeBookingId,
+          busyRows: dayBusy,
         });
         if (assignment) {
           free.push(`${hh}:${mm}`);

@@ -50,6 +50,7 @@ export function getOutgoingAuthor(message: MessengerMessage): OutgoingAuthor {
   const source = typeof raw?.source === "string" ? raw.source : "";
   if (
     source === "groq_auto_reply" ||
+    source === "groq_send_photo" ||
     source === "ai" ||
     source === "auto_reply"
   ) {
@@ -57,6 +58,32 @@ export function getOutgoingAuthor(message: MessengerMessage): OutgoingAuthor {
   }
   // Desk sends and Meta echoes without our AI tag → treat as human / Page desk
   return "you";
+}
+
+/** Public image URL on an outgoing/incoming message, if any. */
+export function getMessageImageUrl(message: MessengerMessage): string | null {
+  const raw = asRecord(message.raw_payload);
+  if (!raw) return null;
+
+  const direct = raw.image_url;
+  if (typeof direct === "string" && /^https:\/\//i.test(direct.trim())) {
+    return direct.trim();
+  }
+
+  const nestedMessage = asRecord(raw.message) ?? raw;
+  const attachments = nestedMessage.attachments;
+  if (!Array.isArray(attachments)) return null;
+
+  for (const entry of attachments) {
+    const att = asRecord(entry);
+    if (!att || att.type !== "image") continue;
+    const payload = asRecord(att.payload);
+    const url = payload?.url;
+    if (typeof url === "string" && /^https:\/\//i.test(url.trim())) {
+      return url.trim();
+    }
+  }
+  return null;
 }
 
 /** Strip reaction keys from a raw_payload object (immutable). */

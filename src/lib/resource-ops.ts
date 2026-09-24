@@ -34,6 +34,7 @@ export function normalizeResource(
     active: row.active !== false,
     sort_order: typeof row.sort_order === "number" ? row.sort_order : 0,
     notes: row.notes?.trim() || null,
+    icon: typeof row.icon === "string" && row.icon.trim() ? row.icon.trim() : null,
     open_time: row.open_time?.trim() || null,
     close_time: row.close_time?.trim() || null,
     open_days: normalizeOptionalOpenDays(row.open_days),
@@ -174,6 +175,7 @@ export type CreateResourceInput = {
   name: string;
   kind?: ResourceKind;
   notes?: string | null;
+  icon?: string | null;
   open_time?: string | null;
   close_time?: string | null;
   open_days?: WeekdayKey[] | null;
@@ -212,6 +214,7 @@ export async function createResource(
     name,
     kind: normalizeKind(input.kind),
     notes: input.notes?.trim() || null,
+    icon: input.icon?.trim() || null,
     open_time: input.open_time?.trim() || null,
     close_time: input.close_time?.trim() || null,
     open_days: normalizeOptionalOpenDays(input.open_days),
@@ -227,10 +230,10 @@ export async function createResource(
     .select("*")
     .maybeSingle();
 
-  if (error && error.message.includes("serviceable")) {
-    // Migration schema-resource-serviceable.sql not applied yet — retry
-    // without the new column so old DBs keep working.
-    const { serviceable: _omit, ...legacyPayload } = insertPayload;
+  if (error && (error.message.includes("serviceable") || error.message.includes("icon"))) {
+    const legacyPayload = { ...insertPayload };
+    if (error.message.includes("serviceable")) delete legacyPayload.serviceable;
+    if (error.message.includes("icon")) delete legacyPayload.icon;
     const retry = await supabase
       .from("messenger_resources")
       .insert(legacyPayload)
@@ -255,6 +258,7 @@ export type UpdateResourceInput = {
   name?: string;
   kind?: ResourceKind;
   notes?: string | null;
+  icon?: string | null;
   open_time?: string | null;
   close_time?: string | null;
   open_days?: WeekdayKey[] | null;
@@ -277,6 +281,7 @@ export async function updateResource(
   }
   if (input.kind !== undefined) patch.kind = normalizeKind(input.kind);
   if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
+  if (input.icon !== undefined) patch.icon = input.icon?.trim() || null;
   if (input.open_time !== undefined) {
     patch.open_time = input.open_time?.trim() || null;
   }
@@ -299,8 +304,10 @@ export async function updateResource(
     .select("*")
     .maybeSingle();
 
-  if (error && error.message.includes("serviceable")) {
-    const { serviceable: _omit, ...legacyPatch } = patch;
+  if (error && (error.message.includes("serviceable") || error.message.includes("icon"))) {
+    const legacyPatch = { ...patch };
+    if (error.message.includes("serviceable")) delete legacyPatch.serviceable;
+    if (error.message.includes("icon")) delete legacyPatch.icon;
     const retry = await supabase
       .from("messenger_resources")
       .update(legacyPatch)

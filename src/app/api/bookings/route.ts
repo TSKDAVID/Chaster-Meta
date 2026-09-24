@@ -147,6 +147,7 @@ export async function POST(request: NextRequest) {
       time,
       end_date,
       resourceId: wantSpecific ? specificId : null,
+      includeFreeSlots: false,
     });
 
     if (!availability.ok || !availability.available) {

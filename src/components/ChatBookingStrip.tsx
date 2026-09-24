@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  formatBookingWhen,
-  statusLabel,
-} from "@/lib/bookings";
+import { useI18n } from "@/components/I18nProvider";
+import { formatBookingWhen } from "@/lib/bookings";
 import { IconCalendar } from "@/components/icons";
 import { getSupabaseBrowser } from "@/lib/supabase/browser";
 import type { Booking, BookingMode, BookingStatus } from "@/lib/types";
@@ -18,6 +16,16 @@ type Props = {
   onError: (message: string | null) => void;
 };
 
+function bookingStatusLabel(
+  status: string,
+  t: (key: string) => string,
+): string {
+  if (status === "pending") return t("bookings.statusPending");
+  if (status === "cancelled") return t("bookings.statusCancelled");
+  if (status === "completed") return t("bookings.statusDone");
+  return t("bookings.statusBooked");
+}
+
 export default function ChatBookingStrip({
   pageId,
   peerId,
@@ -26,6 +34,7 @@ export default function ChatBookingStrip({
   onOpenLedger,
   onError,
 }: Props) {
+  const { t } = useI18n();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [mode, setMode] = useState<BookingMode>("hourly");
   const [busy, setBusy] = useState(false);
@@ -132,6 +141,8 @@ export default function ChatBookingStrip({
   }
 
   const shown = activeBooking ?? latestPast ?? null;
+  const canComplete =
+    Boolean(activeBooking) && +new Date(activeBooking!.starts_at) <= Date.now();
 
   return (
     <div className="ch-book-strip" data-tour="chat-booking">
@@ -140,10 +151,10 @@ export default function ChatBookingStrip({
       </div>
       <div className="ch-book-strip-body">
         {loading ? (
-          <span className="ch-book-strip-muted">Checking the book…</span>
+          <span className="ch-book-strip-muted">{t("bookingStrip.checking")}</span>
         ) : activeBooking ? (
           <>
-            <span className="ch-book-strip-label">On the book</span>
+            <span className="ch-book-strip-label">{t("bookingStrip.onTheBook")}</span>
             <span className="ch-book-strip-when">
               {formatBookingWhen(
                 activeBooking.starts_at,
@@ -157,42 +168,47 @@ export default function ChatBookingStrip({
               </span>
             ) : null}
             <span className={`ch-book-strip-status is-${activeBooking.status}`}>
-              {statusLabel(activeBooking.status)}
+              {bookingStatusLabel(activeBooking.status, t)}
             </span>
           </>
         ) : shown ? (
           <>
             <span className="ch-book-strip-muted">
-              Last: {formatBookingWhen(shown.starts_at, shown.ends_at, mode)}
+              {t("bookingStrip.last", {
+                when: formatBookingWhen(shown.starts_at, shown.ends_at, mode),
+              })}
               {" · "}
-              {statusLabel(shown.status)}
+              {bookingStatusLabel(shown.status, t)}
             </span>
           </>
         ) : (
           <span className="ch-book-strip-muted">
-            No appointment for {displayName?.trim() || "this chat"} yet
+            {displayName?.trim()
+              ? t("bookingStrip.noBookingNamed", { name: displayName.trim() })
+              : t("bookingStrip.noBooking")}
           </span>
         )}
       </div>
       <div className="ch-book-strip-actions">
         {activeBooking && (
           <>
+            {canComplete ? (
+              <button
+                type="button"
+                className="ch-btn ch-btn-text h-7 px-1.5 text-[11px]"
+                disabled={busy}
+                onClick={() => void setStatus(activeBooking.id, "completed")}
+              >
+                {t("common.done")}
+              </button>
+            ) : null}
             <button
               type="button"
-              className="ch-btn ch-btn-text h-7 px-1.5 text-[11px]"
-              disabled={busy}
-              onClick={() => void setStatus(activeBooking.id, "completed")}
-            >
-              Done
-            </button>
-            <button
-              type="button"
-              className="ch-btn ch-btn-text h-7 px-1.5 text-[11px]"
-              style={{ color: "var(--chaster-danger-text)" }}
+              className="ch-btn ch-btn-text ch-btn-danger h-7 px-1.5 text-[11px]"
               disabled={busy}
               onClick={() => void setStatus(activeBooking.id, "cancelled")}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           </>
         )}
@@ -201,7 +217,7 @@ export default function ChatBookingStrip({
           className="ch-btn ch-btn-ghost h-7 px-2 text-[11px]"
           onClick={onOpenLedger}
         >
-          {activeBooking ? "Manage" : "Book"}
+          {activeBooking ? t("bookingStrip.manage") : t("bookingStrip.book")}
         </button>
       </div>
     </div>

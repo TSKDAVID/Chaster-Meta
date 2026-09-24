@@ -8,8 +8,6 @@ import {
   type FormEvent,
 } from "react";
 import {
-  bookingModeHint,
-  bookingModeLabel,
   computeEndsAt,
   DEFAULT_BOOKING_SETTINGS,
   formatBookingWhen,
@@ -19,31 +17,35 @@ import {
   hourlySlotStarts,
   monthGrid,
   parseYmd,
-  statusLabel,
   toYmd,
   WEEKDAY_ORDER,
   weekdayKeyFromYmd,
-  weekdayLabel,
 } from "@/lib/bookings";
+import { useI18n } from "@/components/I18nProvider";
+import type { TranslateFn } from "@/lib/i18n";
 import {
   isResourcesTab,
   type BookingDeskTab,
 } from "@/lib/desk-routes";
+import { formatAgo, formatClock, formatClockRange, formatHmRange } from "@/lib/format-time";
 import {
   combinedProviderWindow,
   effectiveWindowForPair,
   parseHmMinutes,
 } from "@/lib/resource-hours";
+import DeskToolbar, { Segmented } from "@/components/DeskToolbar";
+import TimeSelect from "@/components/TimeSelect";
 import {
-  IconBack,
-  IconCalendar,
+  IconCaret,
+  IconCheck,
   IconChevron,
-  IconClock,
-  IconGlobe,
-  IconLayers,
-  IconLink,
-  IconUser,
+  IconClose,
+  IconJump,
+  IconMore,
 } from "@/components/icons";
+import HelpTip from "@/components/HelpTip";
+import ServiceGlyph, { ServiceIconPicker } from "@/components/ServiceGlyph";
+import { SERVICE_ICON_IDS, defaultIconForKind } from "@/lib/service-icons";
 import { getSupabaseBrowser } from "@/lib/supabase/browser";
 import type {
   BookableResource,
@@ -71,15 +73,9 @@ type Props = {
 type BufferUnit = "minutes" | "hours" | "days";
 
 const MODES: BookingMode[] = ["hourly", "day", "multi_day"];
-const WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 const BUFFER_PRESETS = [0, 5, 10, 15, 30, 45, 60] as const;
-const RESOURCE_KINDS: ResourceKind[] = [
-  "service",
-  "staff",
-  "room",
-  "equipment",
-  "other",
-];
+/** Timeline row height per slot, px. */
+const SLOT_ROW_PX = 44;
 const CATALOG_KINDS: ResourceKind[] = [
   "service",
   "room",
@@ -87,23 +83,58 @@ const CATALOG_KINDS: ResourceKind[] = [
   "other",
 ];
 
-function kindLabel(kind: ResourceKind) {
-  if (kind === "service") return "Service";
-  if (kind === "staff") return "Team member";
-  if (kind === "room") return "Room";
-  if (kind === "equipment") return "Equipment";
-  return "Other";
+const WEEK_KEYS = {
+  mon: "bookings.weekMon",
+  tue: "bookings.weekTue",
+  wed: "bookings.weekWed",
+  thu: "bookings.weekThu",
+  fri: "bookings.weekFri",
+  sat: "bookings.weekSat",
+  sun: "bookings.weekSun",
+} as const;
+
+function kindLabel(kind: ResourceKind, t: TranslateFn) {
+  if (kind === "service") return t("bookings.kindService");
+  if (kind === "staff") return t("bookings.kindStaff");
+  if (kind === "room") return t("bookings.kindRoom");
+  if (kind === "equipment") return t("bookings.kindEquipment");
+  return t("bookings.kindOther");
 }
 
-function kindBlurb(kind: ResourceKind) {
-  if (kind === "staff") return "A person who can take appointments.";
-  if (kind === "service")
-    return "Something customers book. Connect staff who can provide it — bookable only where service hours and staff hours overlap.";
-  if (kind === "room")
-    return "A space where selected services can be provided.";
-  if (kind === "equipment")
-    return "Gear that can be assigned to selected services.";
-  return "Anything else you want on the calendar.";
+function statusLabel(status: string, t: TranslateFn) {
+  if (status === "pending") return t("bookings.statusPending");
+  if (status === "cancelled") return t("bookings.statusCancelled");
+  if (status === "completed") return t("bookings.statusDone");
+  return t("bookings.statusBooked");
+}
+
+function bookingModeLabel(mode: BookingMode, t: TranslateFn) {
+  if (mode === "hourly") return t("bookings.modeHourly");
+  if (mode === "day") return t("bookings.modeDay");
+  return t("bookings.modeMulti");
+}
+
+function bookingModeHint(mode: BookingMode, t: TranslateFn) {
+  if (mode === "hourly") return t("bookings.modeHourlyHint");
+  if (mode === "day") return t("bookings.modeDayHint");
+  return t("bookings.modeMultiHint");
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase();
+}
+
+function resourceHoursLabel(
+  r: BookableResource,
+  settings: { open_time: string; close_time: string },
+  hour12: boolean,
+) {
+  return formatHmRange(r.open_time ?? settings.open_time, r.close_time ?? settings.close_time, {
+    hour12,
+  });
 }
 
 function canProvideServiceLocal(r: BookableResource): boolean {
@@ -112,73 +143,94 @@ function canProvideServiceLocal(r: BookableResource): boolean {
   return r.serviceable === true;
 }
 
-function KindMark({ kind }: { kind: ResourceKind }) {
-  if (kind === "staff") return <IconUser size={14} />;
-  if (kind === "service") return <IconLayers size={14} />;
-  return <IconLink size={14} />;
-}
-
 function linkSummary(
   r: BookableResource,
   all: BookableResource[],
+  t: TranslateFn,
 ): { line: string; tone: "ok" | "warn" | "muted" } {
   if (r.kind === "service") {
     const names = (r.linked_ids ?? [])
       .map((id) => all.find((x) => x.id === id)?.name)
       .filter(Boolean) as string[];
     if (names.length === 0) {
-      return { line: "Not connected yet — pick who can do this", tone: "warn" };
+      return { line: t("bookings.noOneAssigned"), tone: "warn" };
     }
     return {
-      line: `Works with ${names.slice(0, 3).join(", ")}${names.length > 3 ? "…" : ""}`,
+      line: `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3}` : ""}`,
       tone: "ok",
     };
   }
   const offered = all.filter(
-    (s) => s.kind === "service" && (s.linked_ids ?? []).includes(r.id),
+    (svc) => svc.kind === "service" && (svc.linked_ids ?? []).includes(r.id),
   );
   if (r.kind === "staff") {
     if (offered.length === 0) {
-      return {
-        line: "Not on any service yet — connect them from Services & rooms",
-        tone: "muted",
-      };
+      return { line: t("bookings.noServices"), tone: "muted" };
     }
     return {
-      line: `On ${offered
+      line: `${offered
         .slice(0, 3)
-        .map((s) => s.name)
-        .join(", ")}${offered.length > 3 ? "…" : ""}`,
+        .map((svc) => svc.name)
+        .join(", ")}${offered.length > 3 ? ` +${offered.length - 3}` : ""}`,
       tone: "ok",
     };
   }
-  // Rooms / equipment / other: show services here + staff here.
   const staffHere = (r.linked_ids ?? [])
     .map((id) => all.find((x) => x.id === id && x.kind === "staff")?.name)
     .filter(Boolean) as string[];
   const bits: string[] = [];
   if (offered.length > 0) {
     bits.push(
-      `${offered.length} service${offered.length === 1 ? "" : "s"}: ${offered
-        .slice(0, 2)
-        .map((s) => s.name)
-        .join(", ")}${offered.length > 2 ? "…" : ""}`,
+      offered.length === 1
+        ? t("bookings.nServices", { n: offered.length })
+        : t("bookings.nServicesPlural", { n: offered.length }),
     );
   }
   if (staffHere.length > 0) {
-    bits.push(
-      `${staffHere.length} staff: ${staffHere.slice(0, 2).join(", ")}${
-        staffHere.length > 2 ? "…" : ""
-      }`,
-    );
+    bits.push(t("bookings.nStaff", { n: staffHere.length }));
   }
   if (bits.length === 0) {
-    return {
-      line: "Empty room — add services, and optionally staff",
-      tone: "muted",
-    };
+    return { line: t("bookings.empty"), tone: "muted" };
   }
   return { line: bits.join(" · "), tone: "ok" };
+}
+
+function ResourceThumb({
+  resource,
+  size = "md",
+}: {
+  resource: BookableResource;
+  size?: "md" | "sm";
+}) {
+  const sm = size === "sm";
+  if (resource.kind === "staff") {
+    return (
+      <span className={`ch-thumb is-avatar${sm ? " is-sm" : ""}`} aria-hidden>
+        {initials(resource.name)}
+      </span>
+    );
+  }
+  const iconId =
+    resource.icon ?? defaultIconForKind(resource.kind === "service" ? "service" : "room");
+  return (
+    <span
+      className={`ch-thumb is-glyph${resource.kind === "service" ? " is-service" : ""}${sm ? " is-sm" : ""}`}
+      aria-hidden
+    >
+      <ServiceGlyph id={iconId} size={sm ? 13 : 15} />
+    </span>
+  );
+}
+
+function ymdOf(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(+d) ? "" : toYmd(d);
+}
+
+function slotLocalFromIso(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return null;
+  return `${toYmd(d)}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function isBufferPreset(mins: number) {
@@ -216,7 +268,6 @@ export default function BookingDrawer({
   open,
   onClose,
   pageId,
-  pageName,
   focusPeerId,
   focusPeerName,
   onError,
@@ -224,6 +275,14 @@ export default function BookingDrawer({
   tab: tabProp = "schedule",
   onTabChange,
 }: Props) {
+  const { t } = useI18n();
+  const bookingTabs = [
+    ["schedule", t("bookings.schedule")],
+    ["team", t("bookings.team")],
+    ["catalog", t("bookings.servicesRooms")],
+    ["setup", t("bookings.setup")],
+  ] as const;
+  const weekdays = t("bookings.weekInitials").split(",");
   const [internalTab, setInternalTab] = useState<BookingDeskTab>("schedule");
   const tab = onTabChange ? tabProp : internalTab;
   function setTab(next: BookingDeskTab) {
@@ -254,11 +313,9 @@ export default function BookingDrawer({
   const [selectedResourceId, setSelectedResourceId] = useState<string | null>(
     null,
   );
-  const [editingNameId, setEditingNameId] = useState<string | null>(null);
-  const [editNameDraft, setEditNameDraft] = useState("");
-  const [staffPickerRoomIds, setStaffPickerRoomIds] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [detailMenuOpen, setDetailMenuOpen] = useState(false);
+  const [resourceSavedAt, setResourceSavedAt] = useState<number | null>(null);
 
   const today = useMemo(() => {
     const d = new Date();
@@ -271,6 +328,15 @@ export default function BookingDrawer({
   const [selectedYmd, setSelectedYmd] = useState(() => toYmd(today));
   const [rangeEndYmd, setRangeEndYmd] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setInterval(() => setNowTick(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [open]);
 
   const mode = settings?.booking_mode ?? "hourly";
 
@@ -324,6 +390,8 @@ export default function BookingDrawer({
     setServiceLabel("");
     setNotes("");
     setSelectedSlot(null);
+    setSheetOpen(false);
+    setEditingId(null);
     setRangeEndYmd(null);
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -375,11 +443,29 @@ export default function BookingDrawer({
   useEffect(() => {
     if (!open || !onClose) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose?.();
+      if (e.key !== "Escape") return;
+      if (addMenuOpen || detailMenuOpen) {
+        setAddMenuOpen(false);
+        setDetailMenuOpen(false);
+        return;
+      }
+      onClose?.();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, addMenuOpen, detailMenuOpen]);
+
+  useEffect(() => {
+    if (!addMenuOpen && !detailMenuOpen) return;
+    function onDoc(e: PointerEvent) {
+      const t = e.target as Element | null;
+      if (t?.closest?.(".ch-menu-anchor")) return;
+      setAddMenuOpen(false);
+      setDetailMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [addMenuOpen, detailMenuOpen]);
 
   const activeBookings = useMemo(
     () =>
@@ -405,10 +491,26 @@ export default function BookingDrawer({
   );
 
   const sectionResources = tab === "catalog" ? catalogResources : teamResources;
+  const catalogServices = useMemo(
+    () => sectionResources.filter((r) => r.kind === "service"),
+    [sectionResources],
+  );
+  const catalogRooms = useMemo(
+    () => sectionResources.filter((r) => r.kind !== "service"),
+    [sectionResources],
+  );
+
+  // Detail pane is never empty when the list has data.
+  const effectiveResourceId =
+    selectedResourceId && sectionResources.some((r) => r.id === selectedResourceId)
+      ? selectedResourceId
+      : !addingResource
+        ? sectionResources[0]?.id ?? null
+        : selectedResourceId;
 
   const selectedResource = useMemo(
-    () => sectionResources.find((r) => r.id === selectedResourceId) ?? null,
-    [sectionResources, selectedResourceId],
+    () => sectionResources.find((r) => r.id === effectiveResourceId) ?? null,
+    [sectionResources, effectiveResourceId],
   );
 
   const resourceNameById = useMemo(() => {
@@ -457,6 +559,7 @@ export default function BookingDrawer({
   function isCapacityBusy(capacityId: string, start: number, end: number) {
     return activeBookings.some(
       (b) =>
+        b.id !== editingId &&
         bookingBlocksCapacity(b, capacityId) &&
         overlaps(
           start,
@@ -518,14 +621,16 @@ export default function BookingDrawer({
   function isIntervalTaken(start: number, end: number) {
     if (Number.isNaN(start)) return true;
     if (activeResources.length === 0) {
-      return activeBookings.some((b) =>
-        overlaps(
-          start,
-          end,
-          +new Date(b.starts_at),
-          +new Date(b.ends_at),
-          bufferMs,
-        ),
+      return activeBookings.some(
+        (b) =>
+          b.id !== editingId &&
+          overlaps(
+            start,
+            end,
+            +new Date(b.starts_at),
+            +new Date(b.ends_at),
+            bufferMs,
+          ),
       );
     }
     if (resourcePick === "any") {
@@ -645,14 +750,52 @@ export default function BookingDrawer({
     bufferMs,
     activeResources,
     resourcePick,
+    editingId,
   ]);
 
-  const upcoming = useMemo(() => {
-    const now = Date.now();
-    return bookings.filter(
-      (b) => b.status !== "cancelled" && +new Date(b.ends_at) >= now - 86400000,
-    );
-  }, [bookings]);
+  /** Upcoming = still live (confirmed / pending) and not ended. Everything else is Past. */
+  const upcoming = useMemo(
+    () =>
+      bookings
+        .filter(
+          (b) =>
+            (b.status === "confirmed" || b.status === "pending") &&
+            +new Date(b.ends_at) >= nowTick,
+        )
+        .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at)),
+    [bookings, nowTick],
+  );
+
+  const past = useMemo(
+    () =>
+      bookings
+        .filter(
+          (b) =>
+            !(
+              (b.status === "confirmed" || b.status === "pending") &&
+              +new Date(b.ends_at) >= nowTick
+            ),
+        )
+        .sort((a, b) => +new Date(b.starts_at) - +new Date(a.starts_at))
+        .slice(0, 40),
+    [bookings, nowTick],
+  );
+
+  /** Days in the visible month that carry a live booking. */
+  const bookedYmds = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of activeBookings) set.add(ymdOf(b.starts_at));
+    return set;
+  }, [activeBookings]);
+
+  /** Live bookings on the selected day, for the timeline. */
+  const dayBookings = useMemo(
+    () =>
+      activeBookings
+        .filter((b) => ymdOf(b.starts_at) === selectedYmd)
+        .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at)),
+    [activeBookings, selectedYmd],
+  );
 
   function shiftMonth(delta: number) {
     const d = new Date(viewYear, viewMonth + delta, 1);
@@ -717,7 +860,7 @@ export default function BookingDrawer({
     }
   }
 
-  async function createBooking(e?: FormEvent) {
+  async function saveBooking(e?: FormEvent) {
     e?.preventDefault();
     if (!pageId || !settings) return;
     setSaving(true);
@@ -727,13 +870,13 @@ export default function BookingDrawer({
       let endsAt: string;
 
       if (mode === "hourly") {
-        if (!selectedSlot) throw new Error("Pick a time slot");
+        if (!selectedSlot) throw new Error(t("bookings.pickTimeSlot"));
         startsAt = new Date(selectedSlot).toISOString();
         endsAt =
           computeEndsAt(selectedSlot, "hourly", settings.slot_minutes) ??
           startsAt;
       } else if (mode === "day") {
-        if (!selectedYmd) throw new Error("Pick a day");
+        if (!selectedYmd) throw new Error(t("bookings.pickADay"));
         startsAt = new Date(
           `${selectedYmd}T${settings.open_time}:00`,
         ).toISOString();
@@ -742,7 +885,7 @@ export default function BookingDrawer({
         ).toISOString();
       } else {
         const endYmd = rangeEndYmd || selectedYmd;
-        if (!selectedYmd) throw new Error("Pick check-in and check-out");
+        if (!selectedYmd) throw new Error(t("bookings.pickCheckInCheckOut"));
         const a = selectedYmd <= endYmd ? selectedYmd : endYmd;
         const b = selectedYmd <= endYmd ? endYmd : selectedYmd;
         startsAt = new Date(`${a}T${settings.open_time}:00`).toISOString();
@@ -750,37 +893,103 @@ export default function BookingDrawer({
       }
 
       if (+new Date(endsAt) <= +new Date(startsAt)) {
-        throw new Error("End must be after start");
+        throw new Error(t("bookings.endAfterStart"));
       }
 
+      const payload = {
+        customer_name: customerName.trim() || focusPeerName || null,
+        service_label: serviceLabel.trim() || null,
+        notes: notes.trim() || null,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        resource_id: resourcePick === "any" ? null : resourcePick,
+      };
+
       const res = await fetch("/api/bookings", {
-        method: "POST",
+        method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          page_id: pageId,
-          peer_id: linkPeer && focusPeerId ? focusPeerId : null,
-          customer_name: customerName.trim() || focusPeerName || null,
-          service_label: serviceLabel.trim() || null,
-          notes: notes.trim() || null,
-          starts_at: startsAt,
-          ends_at: endsAt,
-          status: "confirmed",
-          source: "desk",
-          assignment: resourcePick === "any" ? "any" : "specific",
-          resource_id: resourcePick === "any" ? null : resourcePick,
-        }),
+        body: JSON.stringify(
+          editingId
+            ? { id: editingId, ...payload }
+            : {
+                page_id: pageId,
+                peer_id: linkPeer && focusPeerId ? focusPeerId : null,
+                ...payload,
+                status: "confirmed",
+                source: "desk",
+                assignment: resourcePick === "any" ? "any" : "specific",
+              },
+        ),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to create booking");
+      if (!res.ok) {
+        throw new Error(
+          data.error ?? (editingId ? "Failed to update booking" : "Failed to create booking"),
+        );
+      }
+      const saved = data.booking as Booking | undefined;
+      if (saved) {
+        setBookings((prev) =>
+          [...prev.filter((b) => b.id !== saved.id), saved].sort(
+            (a, b) => +new Date(a.starts_at) - +new Date(b.starts_at),
+          ),
+        );
+      }
       setServiceLabel("");
       setNotes("");
       setSelectedSlot(null);
-      await load();
+      setEditingId(null);
+      setSheetOpen(false);
+      void load({ silent: true });
     } catch (err) {
-      onError(err instanceof Error ? err.message : "Failed to create booking");
+      onError(
+        err instanceof Error
+          ? err.message
+          : editingId
+            ? "Failed to update booking"
+            : "Failed to create booking",
+      );
     } finally {
       setSaving(false);
     }
+  }
+
+  function closeSheet() {
+    setSheetOpen(false);
+    setEditingId(null);
+  }
+
+  function openSheetForSlot(local: string) {
+    setEditingId(null);
+    setSelectedSlot(local);
+    setSheetOpen(true);
+  }
+
+  function openEditBooking(b: Booking) {
+    setEditingId(b.id);
+    setCustomerName(b.customer_name ?? "");
+    setServiceLabel(b.service_label ?? "");
+    setNotes(b.notes ?? "");
+    setResourcePick(b.resource_id ?? "any");
+    const ymd = ymdOf(b.starts_at);
+    if (ymd) {
+      const d = new Date(b.starts_at);
+      setSelectedYmd(ymd);
+      setViewYear(d.getFullYear());
+      setViewMonth(d.getMonth());
+    }
+    if (mode === "hourly") {
+      setSelectedSlot(slotLocalFromIso(b.starts_at));
+      setRangeEndYmd(null);
+    } else if (mode === "multi_day") {
+      setSelectedSlot(null);
+      setRangeEndYmd(ymdOf(b.ends_at) || null);
+    } else {
+      setSelectedSlot(null);
+      setRangeEndYmd(null);
+    }
+    setLinkPeer(Boolean(focusPeerId && b.peer_id === focusPeerId));
+    setSheetOpen(true);
   }
 
   async function addResource() {
@@ -804,8 +1013,8 @@ export default function BookingDrawer({
       const created = data.resource as BookableResource | undefined;
       if (created?.id) {
         setSelectedResourceId(created.id);
-        setEditingNameId(null);
       }
+      setResourceSavedAt(Date.now());
       await load({ silent: true });
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to add resource");
@@ -815,17 +1024,17 @@ export default function BookingDrawer({
   }
 
   function beginAdd(kind: ResourceKind) {
+    setAddMenuOpen(false);
     setNewResourceKind(kind);
     setAddingResource(true);
-    setEditingNameId(null);
   }
 
-  async function commitRename(id: string) {
-    const name = editNameDraft.trim();
-    const current = resources.find((r) => r.id === id);
-    setEditingNameId(null);
-    if (!name || !current || name === current.name) return;
-    await patchResource(id, { name });
+  function goToResource(target: BookableResource) {
+    setDetailMenuOpen(false);
+    setTab(target.kind === "staff" ? "team" : "catalog");
+    setSelectedResourceId(target.id);
+    setAddingResource(false);
+    setResourceSavedAt(null);
   }
 
   async function patchResource(
@@ -834,6 +1043,7 @@ export default function BookingDrawer({
       name: string;
       kind: ResourceKind;
       active: boolean;
+      icon: string | null;
       open_time: string | null;
       close_time: string | null;
       open_days: WeekdayKey[] | null;
@@ -852,6 +1062,7 @@ export default function BookingDrawer({
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to update resource");
+      setResourceSavedAt(Date.now());
       await load({ silent: true });
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to update resource");
@@ -866,11 +1077,12 @@ export default function BookingDrawer({
     const label = target?.name?.trim() || "this item";
     if (
       !confirm(
-        `Delete “${label}”? This can’t be undone.`,
+        t("bookings.deleteConfirm", { label }),
       )
     ) {
       return;
     }
+    setDetailMenuOpen(false);
     setSaving(true);
     onError(null);
     try {
@@ -882,7 +1094,7 @@ export default function BookingDrawer({
       if (!res.ok) throw new Error(data.error ?? "Failed to delete resource");
       if (resourcePick === id) setResourcePick("any");
       if (selectedResourceId === id) setSelectedResourceId(null);
-      if (editingNameId === id) setEditingNameId(null);
+      setResourceSavedAt(null);
       await load({ silent: true });
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to delete resource");
@@ -914,6 +1126,7 @@ export default function BookingDrawer({
 
   const s = settings ?? { ...DEFAULT_BOOKING_SETTINGS, page_id: pageId };
   const cells = monthGrid(viewYear, viewMonth);
+  const todayYmd = toYmd(today);
   const canConfirm =
     mode === "hourly"
       ? Boolean(selectedSlot)
@@ -921,36 +1134,200 @@ export default function BookingDrawer({
         ? Boolean(selectedYmd) && isDaySelectable(selectedYmd)
         : Boolean(selectedYmd && rangeEndYmd);
 
-  const durationLabel =
-    mode === "hourly"
-      ? `${s.slot_minutes} mins`
-      : mode === "day"
-        ? "Full day"
-        : "Multi-day stay";
+  const pickedResource =
+    resourcePick === "any"
+      ? null
+      : activeResources.find((r) => r.id === resourcePick) ?? null;
+  const pickedWindow = pickedResource ? availabilityWindowFor(pickedResource) : null;
+  const dayOpen = pickedWindow?.open_time ?? s.open_time;
+  const dayClose = pickedWindow?.close_time ?? s.close_time;
+  const openMin = parseHmMinutes(dayOpen) ?? 9 * 60;
+  const closeMin = parseHmMinutes(dayClose) ?? 18 * 60;
+  const spanMin = Math.max(closeMin - openMin, s.slot_minutes);
+  const pxPerMin = SLOT_ROW_PX / Math.max(s.slot_minutes, 1);
+  const timelineHeight = Math.round(spanMin * pxPerMin);
+  const dayStartMs = new Date(`${selectedYmd}T00:00:00`).getTime();
+  const nowOffsetPx =
+    selectedYmd === todayYmd
+      ? ((nowTick - dayStartMs) / 60_000 - openMin) * pxPerMin
+      : null;
 
-  function renderResourceEditor(
-    r: BookableResource,
-    opts?: { showIdentity?: boolean },
-  ) {
+  const hourMarks: number[] = [];
+  for (let m = Math.ceil(openMin / 60) * 60; m <= closeMin; m += 60) {
+    hourMarks.push(m);
+  }
+
+  const selectedSlotEnd = selectedSlot
+    ? new Date(new Date(selectedSlot).getTime() + s.slot_minutes * 60_000)
+    : null;
+
+  const sheetWhen =
+    mode === "hourly"
+      ? selectedSlot && selectedSlotEnd
+        ? `${formatDayHeader(selectedYmd)} · ${formatClockRange(selectedSlot, selectedSlotEnd, { hour12 })}`
+        : formatDayHeader(selectedYmd)
+      : mode === "day"
+        ? `${formatDayHeader(selectedYmd)} · ${formatHmRange(s.open_time, s.close_time, { hour12 })}`
+        : rangeEndYmd
+          ? `${formatDayHeader(selectedYmd)} → ${formatDayHeader(rangeEndYmd)}`
+          : formatDayHeader(selectedYmd);
+
+  function resourceLine(b: Booking) {
+    const primary = b.resource_id ? resourceNameById.get(b.resource_id) : null;
+    const assigned = b.assigned_resource_id
+      ? resourceNameById.get(b.assigned_resource_id)
+      : null;
+    const bits: string[] = [];
+    if (b.service_label) bits.push(b.service_label);
+    else if (primary) bits.push(primary);
+    const staff = assigned && assigned !== primary ? assigned : primary && b.service_label ? primary : null;
+    return { head: bits.join(" · "), staff };
+  }
+
+  function renderLedgerRow(b: Booking, section: "upcoming" | "past") {
+    const started = +new Date(b.starts_at) <= nowTick;
+    const live = b.status === "confirmed" || b.status === "pending";
+    const { head, staff } = resourceLine(b);
+    return (
+      <li key={b.id} className={`ch-ledger-row is-${b.status}`}>
+        <div className="ch-ledger-main">
+          <div className="ch-ledger-when tabular-nums">
+            {formatBookingWhen(b.starts_at, b.ends_at, mode, { hour12 })}
+          </div>
+          <div className="ch-ledger-who">
+            <span className="ch-ledger-name">{b.customer_name || t("bookings.unnamed")}</span>
+            {head ? <span className="ch-ledger-svc"> · {head}</span> : null}
+            {staff ? <span className="ch-ledger-staff"> → {staff}</span> : null}
+          </div>
+          <div className="ch-ledger-meta">
+            <span className={`ch-status-word is-${b.status}`}>{statusLabel(b.status, t)}</span>
+            <span aria-hidden>·</span>
+            <span>{b.source === "ai" ? t("bookings.sourceAi") : t("bookings.sourceDesk")}</span>
+            {b.peer_id ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>{t("bookings.chat")}</span>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="ch-row-actions">
+          {live ? (
+            <>
+              <button
+                type="button"
+                className="ch-btn ch-btn-text h-7 px-2"
+                disabled={saving}
+                onClick={() => openEditBooking(b)}
+              >
+                {t("common.edit")}
+              </button>
+              {started ? (
+                <button
+                  type="button"
+                  className="ch-btn ch-btn-text h-7 px-2"
+                  disabled={saving}
+                  onClick={() => void setStatus(b.id, "completed")}
+                >
+                  {t("common.done")}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ch-btn ch-btn-text ch-btn-danger h-7 px-2"
+                disabled={saving}
+                onClick={() => void setStatus(b.id, "cancelled")}
+              >
+                {t("common.cancel")}
+              </button>
+            </>
+          ) : section === "past" && b.status === "cancelled" ? (
+            <button
+              type="button"
+              className="ch-btn ch-btn-text h-7 px-2"
+              disabled={saving}
+              onClick={() => void setStatus(b.id, "confirmed")}
+            >
+              {t("common.restore")}
+            </button>
+          ) : section === "past" && b.status === "completed" && +new Date(b.ends_at) > nowTick ? (
+            <button
+              type="button"
+              className="ch-btn ch-btn-text h-7 px-2"
+              disabled={saving}
+              onClick={() => void setStatus(b.id, "confirmed")}
+            >
+              {t("common.reopen")}
+            </button>
+          ) : null}
+        </div>
+      </li>
+    );
+  }
+
+  function renderResourceListItem(r: BookableResource) {
+    const summary = linkSummary(r, resources, t);
+    const selected = effectiveResourceId === r.id;
+    const trailing =
+      tab === "team"
+        ? resourceHoursLabel(r, s, hour12)
+        : kindLabel(r.kind, t);
+    return (
+      <li key={r.id}>
+        <div
+          className={`ch-list-row ch-res-row${selected ? " is-active" : ""}${r.active ? "" : " is-muted"}`}
+          role="button"
+          tabIndex={0}
+          aria-current={selected ? "true" : undefined}
+          onClick={() => {
+            setSelectedResourceId(r.id);
+            setAddingResource(false);
+            setDetailMenuOpen(false);
+            setResourceSavedAt(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setSelectedResourceId(r.id);
+              setAddingResource(false);
+              setResourceSavedAt(null);
+            }
+          }}
+        >
+          <ResourceThumb resource={r} />
+          <span className="ch-res-row-text">
+            <span className="ch-list-title">{r.name}</span>
+            <span className={`ch-list-meta is-${summary.tone}`}>{summary.line}</span>
+          </span>
+          <span
+            className={`ch-list-trailing tabular-nums${tab === "team" ? " is-value" : ""}`}
+          >
+            {trailing}
+          </span>
+        </div>
+        {selected ? (
+          <div className="ch-mobile-detail">
+            {renderResourceEditor(r, { showIdentity: false })}
+          </div>
+        ) : null}
+      </li>
+    );
+  }
+
+  function renderResourceEditor(r: BookableResource, opts?: { showIdentity?: boolean }) {
     const showIdentity = opts?.showIdentity !== false;
     const linked = new Set(r.linked_ids ?? []);
     const customDays = Boolean(r.open_days?.length);
-    const effectiveDays =
-      customDays && r.open_days ? r.open_days : s.open_days;
+    const effectiveDays = customDays && r.open_days ? r.open_days : s.open_days;
     const fallbackWindow = {
       open_time: s.open_time,
       close_time: s.close_time,
       open_days: s.open_days,
     };
     const eligibleProviders = resources.filter(
-      (o) =>
-        o.id !== r.id &&
-        o.kind === "staff" &&
-        canProvideServiceLocal(o),
+      (o) => o.id !== r.id && o.kind === "staff" && canProvideServiceLocal(o),
     );
-    const linkedProviders = resources.filter(
-      (o) => o.kind === "staff" && linked.has(o.id),
-    );
+    const linkedProviders = resources.filter((o) => o.kind === "staff" && linked.has(o.id));
     const combinedStaffWindow =
       r.kind === "service" && linkedProviders.length > 0
         ? combinedProviderWindow({
@@ -959,1573 +1336,1349 @@ export default function BookingDrawer({
             fallback: fallbackWindow,
           })
         : null;
-    const onServices = resources.filter(
-      (svc) =>
-        svc.kind === "service" && (svc.linked_ids ?? []).includes(r.id),
+    const allServices = resources.filter((o) => o.kind === "service");
+    const allStaff = resources.filter((o) => o.kind === "staff");
+    const roomsForStaff = resources.filter(
+      (o) =>
+        (o.kind === "room" || o.kind === "equipment" || o.kind === "other") &&
+        (o.linked_ids ?? []).includes(r.id),
     );
-    return (
-      <div key={r.id} className="ch-res-detail">
-        <header className="ch-res-detail-head">
-          {showIdentity ? (
-            <div className="ch-res-detail-title-row">
-              <span className="ch-res-kind-mark" aria-hidden>
-                <KindMark kind={r.kind} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="ch-res-eyebrow">{kindLabel(r.kind)}</p>
-                <h3 className="ch-headline ch-res-detail-name">{r.name}</h3>
-                <p className="ch-res-detail-blurb">{kindBlurb(r.kind)}</p>
-              </div>
-            </div>
-          ) : (
-            <p className="ch-res-detail-blurb" style={{ margin: 0 }}>
-              {kindBlurb(r.kind)}
-            </p>
-          )}
-          <div className="ch-res-detail-actions">
-            <label className="ch-res-active">
-              <input
-                type="checkbox"
-                checked={r.active}
-                disabled={saving}
-                onChange={(e) =>
-                  void patchResource(r.id, {
-                    active: e.target.checked,
-                  })
-                }
-                style={{ accentColor: "var(--chaster-accent)" }}
-              />
-              <span>{r.active ? "Shown for booking" : "Hidden"}</span>
-            </label>
-            <button
-              type="button"
-              className="ch-btn ch-btn-text h-8 px-2 text-[11px]"
-              style={{ color: "var(--chaster-danger-text)" }}
-              disabled={saving}
-              onClick={() => void removeResource(r.id)}
-            >
-              Delete
-            </button>
-          </div>
-        </header>
+    const fromStaffHours = r.kind === "service" && linkedProviders.length > 0;
 
-        {r.kind === "service" ? (
-          <section className="ch-res-block">
-            <div className="ch-res-block-label">
-              <IconLink size={12} />
-              Who can provide this?
-            </div>
-            <p className="ch-res-help">
-              Select the team members who provide this service. Their combined
-              working hours become the service hours automatically.
-            </p>
-            {eligibleProviders.length === 0 ? (
-              <p className="ch-res-empty-hint">
-                Add team members under Team first, then come back here.
-              </p>
-            ) : (
-              <div className="ch-res-links">
-                {eligibleProviders.map((o) => {
-                  const checked = linked.has(o.id);
-                  return (
-                    <label
-                      key={o.id}
-                      className={`ch-res-link${checked ? " is-on" : ""}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={saving}
-                        onChange={(e) => {
-                          const next = new Set(linked);
-                          if (e.target.checked) next.add(o.id);
-                          else next.delete(o.id);
-                          void patchResource(r.id, {
-                            linked_ids: [...next],
-                          });
-                        }}
-                      />
-                      <span className="ch-res-link-mark" aria-hidden>
-                        <KindMark kind={o.kind} />
-                      </span>
-                      <span className="ch-res-link-text">
-                        <span className="ch-res-link-name">{o.name}</span>
-                        <span className="ch-res-link-kind">
-                          {kindLabel(o.kind)}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
+    async function toggleServiceLink(svc: BookableResource, include: boolean, memberId: string) {
+      const current = new Set(svc.linked_ids ?? []);
+      if (include) current.add(memberId);
+      else current.delete(memberId);
+      await patchResource(svc.id, { linked_ids: [...current] });
+    }
+
+    async function toggleRoomStaff(room: BookableResource, staffId: string, include: boolean) {
+      const current = new Set(room.linked_ids ?? []);
+      if (include) current.add(staffId);
+      else current.delete(staffId);
+      await patchResource(room.id, { linked_ids: [...current] });
+    }
+
+    function commitName(raw: string) {
+      const name = raw.trim();
+      if (!name || name === r.name) return;
+      void patchResource(r.id, { name });
+    }
+
+    return (
+      <div key={r.id} className="ch-detail">
+        {showIdentity ? (
+          <div className="ch-detail-head">
+            <div className="ch-detail-head-main">
+              <ResourceThumb resource={r} size="sm" />
+              <div className="min-w-0">
+                <h3 className="ch-detail-title">{r.name}</h3>
+                <div className="ch-detail-sub">{kindLabel(r.kind, t)}</div>
               </div>
-            )}
-            {linkedProviders.length > 0 ? (
-              <div className="ch-res-effective">
-                <div className="ch-res-block-label" style={{ marginTop: "0.75rem" }}>
-                  <IconClock size={12} />
-                  Effective hours per person
-                </div>
-                <ul className="ch-res-effective-list">
-                  {linkedProviders.map((o) => {
-                    const window = effectiveWindowForPair({
-                      primary: r,
-                      capacity: o,
-                      fallback: fallbackWindow,
-                    });
-                    return (
-                      <li key={o.id}>
-                        <span className="ch-res-effective-name">{o.name}</span>
-                        {window ? (
-                          <span className="ch-res-effective-hours">
-                            {window.open_time}–{window.close_time} ·{" "}
-                            {window.open_days.map(weekdayLabel).join(" · ")}
-                          </span>
-                        ) : (
-                          <span className="ch-res-effective-none">
-                            No overlap with service hours — never bookable
-                          </span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ) : null}
-          </section>
-        ) : r.kind === "staff" ? (
-          <section className="ch-res-block">
-            <div className="ch-res-block-label">
-              <IconLayers size={12} />
-              Services this person does
             </div>
-            <label className="ch-res-serviceable">
-              <input
-                type="checkbox"
-                checked={canProvideServiceLocal(r)}
-                disabled={saving}
-                onChange={(e) =>
-                  void patchResource(r.id, {
-                    serviceable: e.target.checked,
-                  })
-                }
-                style={{ accentColor: "var(--chaster-accent)" }}
-              />
-              <span>
-                <span className="ch-res-serviceable-title">
-                  Can provide services
-                </span>
-                <span className="ch-res-serviceable-hint">
-                  Uncheck if this person never takes service bookings.
-                </span>
-              </span>
-            </label>
-            {onServices.length === 0 ? (
-              <p className="ch-res-help">
-                Not connected yet. Open Services & rooms, pick a service, and
-                check this name — or open a room and add them under “Staff in
-                this room”.
-              </p>
-            ) : (
-              <ul className="ch-res-chip-list">
-                {onServices.map((svc) => (
-                  <li key={svc.id}>
+            <div className="ch-detail-actions">
+              <HelpTip tip="hints.bookable">
+                <label className="ch-switch">
+                  <input
+                    type="checkbox"
+                    checked={r.active}
+                    disabled={saving}
+                    onChange={(e) => void patchResource(r.id, { active: e.target.checked })}
+                  />
+                  <span className="ch-switch-track" aria-hidden />
+                  <span>{t("bookings.bookable")}</span>
+                </label>
+              </HelpTip>
+              <div className="ch-menu-anchor">
+                <button
+                  type="button"
+                  className="ch-btn ch-btn-text h-8 w-8 px-0"
+                  aria-label={t("common.more")}
+                  aria-haspopup="menu"
+                  aria-expanded={detailMenuOpen}
+                  disabled={saving}
+                  onClick={() => setDetailMenuOpen((v) => !v)}
+                >
+                  <IconMore size={15} />
+                </button>
+                {detailMenuOpen ? (
+                  <div className="ch-menu ch-menu-sm" role="menu">
                     <button
                       type="button"
-                      className="ch-res-chip"
-                      onClick={() => {
-                        setTab("catalog");
-                        setSelectedResourceId(svc.id);
-                      }}
+                      role="menuitem"
+                      className="ch-menu-item is-danger"
+                      disabled={saving}
+                      onClick={() => void removeResource(r.id)}
                     >
-                      {svc.name}
+                      <span className="ch-menu-item-text">{t("common.delete")}</span>
                     </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {(() => {
-              const roomsHere = resources.filter(
-                (o) =>
-                  (o.kind === "room" ||
-                    o.kind === "equipment" ||
-                    o.kind === "other") &&
-                  (o.linked_ids ?? []).includes(r.id),
-              );
-              return (
-                <>
-                  <div
-                    className="ch-res-block-label"
-                    style={{ marginTop: "0.85rem" }}
-                  >
-                    <IconLink size={12} />
-                    Rooms they work in
                   </div>
-                  {roomsHere.length === 0 ? (
-                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
-                      Not assigned to a room yet — open a room and check them
-                      under “Staff in this room”.
-                    </p>
-                  ) : (
-                    <ul className="ch-res-chip-list">
-                      {roomsHere.map((room) => (
-                        <li key={room.id}>
-                          <button
-                            type="button"
-                            className="ch-res-chip"
-                            onClick={() => {
-                              setTab("catalog");
-                              setSelectedResourceId(room.id);
-                            }}
-                          >
-                            {room.name}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </>
-              );
-            })()}
-          </section>
-        ) : (
-          <section className="ch-res-block">
-            <div className="ch-res-block-label">
-              <IconLayers size={12} />
-              What happens in this {r.kind === "room" ? "room" : r.kind}
+                ) : null}
+              </div>
             </div>
-            <label className="ch-res-serviceable">
-              <input
-                type="checkbox"
-                checked={canProvideServiceLocal(r)}
-                disabled={saving}
-                onChange={(e) =>
-                  void patchResource(r.id, {
-                    serviceable: e.target.checked,
-                  })
-                }
-                style={{ accentColor: "var(--chaster-accent)" }}
-              />
-              <span>
-                <span className="ch-res-serviceable-title">
-                  {r.kind === "room"
-                    ? "Services can be provided here"
-                    : "Can be used for services"}
-                </span>
-                <span className="ch-res-serviceable-hint">
-                  Turn this on to assign services to this {r.kind}.
-                </span>
-              </span>
-            </label>
-            {(() => {
-              const allServices = resources.filter(
-                (o) => o.kind === "service",
-              );
-              const allStaff = resources.filter(
-                (o) => o.kind === "staff" && o.id !== r.id,
-              );
-              const staffHere = new Set(r.linked_ids ?? []);
-              const staffPickerEnabled =
-                staffHere.size > 0 || staffPickerRoomIds.has(r.id);
-              async function toggleServiceInRoom(
-                svc: BookableResource,
-                include: boolean,
-              ) {
-                const current = new Set(svc.linked_ids ?? []);
-                if (include) current.add(r.id);
-                else current.delete(r.id);
-                await patchResource(svc.id, { linked_ids: [...current] });
-              }
-              async function toggleStaffInRoom(
-                staffId: string,
-                include: boolean,
-              ) {
-                const current = new Set(r.linked_ids ?? []);
-                if (include) current.add(staffId);
-                else current.delete(staffId);
-                await patchResource(r.id, { linked_ids: [...current] });
-              }
-              return (
-                <>
-                  <div className="ch-res-block-label">
-                    <IconLayers size={12} />
-                    Services in this {r.kind}
+          </div>
+        ) : null}
+
+        <div className="ch-detail-scroll">
+          <div className="ch-editor">
+            <section className="ch-section">
+              <h4 className="ch-section-title">{t("bookings.basics")}</h4>
+              <label className="ch-field">
+                <span className="ch-label">{t("common.name")}</span>
+                <input
+                  key={`${r.id}-name-${r.name}`}
+                  className="ch-input w-full px-2.5"
+                  defaultValue={r.name}
+                  disabled={saving}
+                  aria-label={t("common.name")}
+                  onBlur={(e) => commitName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                />
+              </label>
+              {r.kind !== "staff" ? (
+                <div className="ch-field">
+                  <span className="ch-label">{t("bookings.type")}</span>
+                  <div className="ch-seg" role="radiogroup" aria-label={t("bookings.type")}>
+                    {CATALOG_KINDS.map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        role="radio"
+                        aria-checked={r.kind === k}
+                        disabled={saving}
+                        className={`ch-seg-tab${r.kind === k ? " is-active" : ""}`}
+                        onClick={() => {
+                          if (r.kind !== k) void patchResource(r.id, { kind: k });
+                        }}
+                      >
+                        {kindLabel(k, t)}
+                      </button>
+                    ))}
                   </div>
-                  {!canProvideServiceLocal(r) ? (
-                    <p className="ch-res-help">
-                      Enable the option above first, then choose which services
-                      can be provided {r.kind === "room" ? "here" : `with this ${r.kind}`}.
-                    </p>
-                  ) : allServices.length === 0 ? (
-                    <p className="ch-res-help">
-                      No services yet — add one under Services & rooms first.
-                    </p>
+                </div>
+              ) : null}
+              {r.kind === "service" || r.kind === "room" || r.kind === "equipment" || r.kind === "other" ? (
+                <ServiceIconPicker
+                  value={r.icon ?? defaultIconForKind(r.kind === "service" ? "service" : "room")}
+                  options={SERVICE_ICON_IDS}
+                  disabled={saving}
+                  label={t("bookings.icon")}
+                  searchLabel={t("bookings.searchIcons")}
+                  onChange={(id) => void patchResource(r.id, { icon: id })}
+                />
+              ) : null}
+            </section>
+
+            {r.kind === "service" ? (
+              <section className="ch-section">
+                <h4 className="ch-section-title">{t("bookings.providedBy")}</h4>
+                {eligibleProviders.length === 0 ? (
+                  <p className="ch-hint">{t("bookings.addTeamFirst")}</p>
+                ) : (
+                  <div className="ch-picks">
+                    {eligibleProviders.map((o) => {
+                      const checked = linked.has(o.id);
+                      const window = checked
+                        ? effectiveWindowForPair({
+                            primary: r,
+                            capacity: o,
+                            fallback: fallbackWindow,
+                          })
+                        : null;
+                      return (
+                        <label key={o.id} className={`ch-pick${checked ? " is-on" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={saving}
+                            onChange={(e) => {
+                              const next = new Set(linked);
+                              if (e.target.checked) next.add(o.id);
+                              else next.delete(o.id);
+                              void patchResource(r.id, { linked_ids: [...next] });
+                            }}
+                          />
+                          <span className="ch-pick-check" aria-hidden />
+                          <span className="ch-pick-avatar" aria-hidden>
+                            {initials(o.name)}
+                          </span>
+                          <span className="ch-pick-body">
+                            <button
+                              type="button"
+                              className="ch-pick-link"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                goToResource(o);
+                              }}
+                            >
+                              {o.name}
+                              <IconJump size={12} className="ch-pick-jump" />
+                            </button>
+                          </span>
+                          {checked ? (
+                            <span className="ch-pick-meta tabular-nums">
+                              {window
+                                ? formatHmRange(window.open_time, window.close_time, { hour12 })
+                                : t("bookings.noOverlap")}
+                            </span>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            ) : r.kind === "staff" ? (
+              <>
+                <section className="ch-section">
+                  <div className="ch-section-head">
+                    <h4 className="ch-section-title">{t("bookings.servicesPersonCanTake")}</h4>
+                    <HelpTip tip="hints.takesServices">
+                      <label className="ch-switch">
+                        <input
+                          type="checkbox"
+                          checked={canProvideServiceLocal(r)}
+                          disabled={saving}
+                          onChange={(e) =>
+                            void patchResource(r.id, { serviceable: e.target.checked })
+                          }
+                        />
+                        <span className="ch-switch-track" aria-hidden />
+                        <span>{t("bookings.takesServices")}</span>
+                      </label>
+                    </HelpTip>
+                  </div>
+                  {allServices.length === 0 ? (
+                    <p className="ch-hint">{t("bookings.addServiceUnder")}</p>
                   ) : (
-                    <div className="ch-res-links">
+                    <div className="ch-picks">
                       {allServices.map((svc) => {
                         const checked = (svc.linked_ids ?? []).includes(r.id);
                         return (
-                          <label
-                            key={svc.id}
-                            className={`ch-res-link${checked ? " is-on" : ""}`}
-                          >
+                          <label key={svc.id} className={`ch-pick${checked ? " is-on" : ""}`}>
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={saving}
+                              disabled={saving || !canProvideServiceLocal(r)}
                               onChange={(e) =>
-                                void toggleServiceInRoom(svc, e.target.checked)
+                                void toggleServiceLink(svc, e.target.checked, r.id)
                               }
                             />
-                            <span
-                              className="ch-res-link-mark"
-                              aria-hidden
-                            >
-                              <KindMark kind={svc.kind} />
-                            </span>
-                            <span className="ch-res-link-text">
-                              <span className="ch-res-link-name">
+                            <span className="ch-pick-check" aria-hidden />
+                            <span className="ch-pick-body">
+                              <button
+                                type="button"
+                                className="ch-pick-link"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  goToResource(svc);
+                                }}
+                              >
                                 {svc.name}
-                              </span>
-                              <span className="ch-res-link-kind">
-                                {(() => {
-                                  const w = effectiveWindowForPair({
-                                    primary: svc,
-                                    capacity: r,
-                                    fallback: fallbackWindow,
-                                  });
-                                  return w
-                                    ? `${w.open_time}–${w.close_time}`
-                                    : "No hours overlap";
-                                })()}
-                              </span>
+                                <IconJump size={12} className="ch-pick-jump" />
+                              </button>
                             </span>
                           </label>
                         );
                       })}
                     </div>
                   )}
-
-                  <div
-                    className="ch-res-block-label"
-                    style={{ marginTop: "0.85rem" }}
-                  >
-                    <IconUser size={12} />
-                    Staff for this {r.kind}
-                  </div>
-                  <label className="ch-res-serviceable">
-                    <input
-                      type="checkbox"
-                      checked={staffPickerEnabled}
-                      disabled={saving}
-                      onChange={(e) => {
-                        const enabled = e.target.checked;
-                        setStaffPickerRoomIds((current) => {
-                          const next = new Set(current);
-                          if (enabled) next.add(r.id);
-                          else next.delete(r.id);
-                          return next;
-                        });
-                        if (!enabled && staffHere.size > 0) {
-                          void patchResource(r.id, { linked_ids: [] });
-                        }
-                      }}
-                      style={{ accentColor: "var(--chaster-accent)" }}
-                    />
-                    <span>
-                      <span className="ch-res-serviceable-title">
-                        Assign specific staff (optional)
-                      </span>
-                      <span className="ch-res-serviceable-hint">
-                        Leave this off if this {r.kind} is not tied to a
-                        particular team member.
-                      </span>
-                    </span>
-                  </label>
-                  {!staffPickerEnabled ? (
-                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
-                      No staff member is required for this {r.kind}.
-                    </p>
-                  ) : allStaff.length === 0 ? (
-                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
-                      No team members yet — add them under Team first.
-                    </p>
+                </section>
+                {roomsForStaff.length > 0 ||
+                resources.some(
+                  (o) => o.kind === "room" || o.kind === "equipment" || o.kind === "other",
+                ) ? (
+                  <section className="ch-section">
+                    <h4 className="ch-section-title">{t("bookings.rooms")}</h4>
+                    <div className="ch-picks">
+                      {resources
+                        .filter(
+                          (o) =>
+                            o.kind === "room" || o.kind === "equipment" || o.kind === "other",
+                        )
+                        .map((room) => {
+                          const checked = (room.linked_ids ?? []).includes(r.id);
+                          return (
+                            <label
+                              key={room.id}
+                              className={`ch-pick${checked ? " is-on" : ""}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                disabled={saving}
+                                onChange={(e) =>
+                                  void toggleRoomStaff(room, r.id, e.target.checked)
+                                }
+                              />
+                              <span className="ch-pick-check" aria-hidden />
+                              <span className="ch-pick-body">
+                                <button
+                                  type="button"
+                                  className="ch-pick-link"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    goToResource(room);
+                                  }}
+                                >
+                                  {room.name}
+                                  <IconJump size={12} className="ch-pick-jump" />
+                                </button>
+                              </span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </section>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <section className="ch-section">
+                  <h4 className="ch-section-title">{t("bookings.usedFor")}</h4>
+                  {allServices.length === 0 ? (
+                    <p className="ch-hint">{t("bookings.addServiceFirst")}</p>
                   ) : (
-                    <div className="ch-res-links">
+                    <div className="ch-picks">
+                      {allServices.map((svc) => {
+                        const checked = (svc.linked_ids ?? []).includes(r.id);
+                        return (
+                          <label key={svc.id} className={`ch-pick${checked ? " is-on" : ""}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={saving}
+                              onChange={(e) =>
+                                void toggleServiceLink(svc, e.target.checked, r.id)
+                              }
+                            />
+                            <span className="ch-pick-check" aria-hidden />
+                            <span className="ch-pick-body">
+                              <button
+                                type="button"
+                                className="ch-pick-link"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  goToResource(svc);
+                                }}
+                              >
+                                {svc.name}
+                                <IconJump size={12} className="ch-pick-jump" />
+                              </button>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+                <section className="ch-section">
+                  <h4 className="ch-section-title">{t("bookings.staff")}</h4>
+                  {allStaff.length === 0 ? (
+                    <p className="ch-hint">{t("bookings.addTeamFirst")}</p>
+                  ) : (
+                    <div className="ch-picks">
                       {allStaff.map((person) => {
-                        const checked = staffHere.has(person.id);
+                        const checked = linked.has(person.id);
                         return (
                           <label
                             key={person.id}
-                            className={`ch-res-link${checked ? " is-on" : ""}`}
+                            className={`ch-pick${checked ? " is-on" : ""}`}
                           >
                             <input
                               type="checkbox"
                               checked={checked}
                               disabled={saving}
-                              onChange={(e) =>
-                                void toggleStaffInRoom(
-                                  person.id,
-                                  e.target.checked,
-                                )
-                              }
+                              onChange={(e) => {
+                                const next = new Set(linked);
+                                if (e.target.checked) next.add(person.id);
+                                else next.delete(person.id);
+                                void patchResource(r.id, { linked_ids: [...next] });
+                              }}
                             />
-                            <span
-                              className="ch-res-link-mark"
-                              aria-hidden
-                            >
-                              <KindMark kind={person.kind} />
+                            <span className="ch-pick-check" aria-hidden />
+                            <span className="ch-pick-avatar" aria-hidden>
+                              {initials(person.name)}
                             </span>
-                            <span className="ch-res-link-text">
-                              <span className="ch-res-link-name">
+                            <span className="ch-pick-body">
+                              <button
+                                type="button"
+                                className="ch-pick-link"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  goToResource(person);
+                                }}
+                              >
                                 {person.name}
-                              </span>
-                              <span className="ch-res-link-kind">
-                                Team member
-                              </span>
+                                <IconJump size={12} className="ch-pick-jump" />
+                              </button>
                             </span>
                           </label>
                         );
                       })}
                     </div>
                   )}
+                </section>
+              </>
+            )}
+
+            <section className="ch-section">
+              {fromStaffHours ? (
+                <>
+                  <div className="ch-section-head">
+                    <h4 className="ch-section-title">{t("bookings.availability")}</h4>
+                    <span className="ch-hint">{t("bookings.fromAssignedStaff")}</span>
+                  </div>
+                  {combinedStaffWindow ? (
+                    <div className="ch-kv">
+                      <span className="tabular-nums">
+                        {formatHmRange(
+                          combinedStaffWindow.open_time,
+                          combinedStaffWindow.close_time,
+                          { hour12 },
+                        )}
+                      </span>
+                      <span className="ch-kv-muted">
+                        {combinedStaffWindow.open_days.map((day) => t(WEEK_KEYS[day])).join(" ")}
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="ch-hint">{t("bookings.staffNoHours")}</p>
+                  )}
                 </>
-              );
-            })()}
-          </section>
-        )}
-
-        <section className="ch-res-block">
-          {r.kind === "service" && linkedProviders.length > 0 ? (
-            <>
-              <div className="ch-res-block-label">
-                <IconClock size={12} />
-                Combined staff hours
-                <span>calculated automatically</span>
-              </div>
-              {combinedStaffWindow ? (
-                <ul className="ch-res-effective-list">
-                  <li>
-                    <span className="ch-res-effective-name">
-                      {combinedStaffWindow.open_time}–
-                      {combinedStaffWindow.close_time}
-                    </span>
-                    <span className="ch-res-effective-hours">
-                      {combinedStaffWindow.open_days
-                        .map(weekdayLabel)
-                        .join(" · ")}
-                    </span>
-                  </li>
-                </ul>
               ) : (
-                <p className="ch-res-help">
-                  The assigned staff do not currently have valid working hours.
-                </p>
-              )}
-              <p className="ch-res-empty-hint">
-                Starts at the earliest assigned staff time and ends at the
-                latest. Actual slots still require at least one assigned team
-                member to be working and free.
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="ch-res-block-label">
-                <IconClock size={12} />
-                When available
-                <span>
-                  blank = store ({s.open_time}–{s.close_time})
-                </span>
-              </div>
-              <div className="ch-res-hours">
-                <input
-                  type="time"
-                  className="ch-input ch-res-time"
-                  defaultValue={r.open_time ?? ""}
-                  disabled={saving}
-                  aria-label="Opens"
-                  onBlur={(e) => {
-                    const v = e.target.value.trim() || null;
-                    if (v !== (r.open_time ?? null)) {
-                      void patchResource(r.id, { open_time: v });
-                    }
-                  }}
-                />
-                <span className="ch-res-hours-sep">–</span>
-                <input
-                  type="time"
-                  className="ch-input ch-res-time"
-                  defaultValue={r.close_time ?? ""}
-                  disabled={saving}
-                  aria-label="Closes"
-                  onBlur={(e) => {
-                    const v = e.target.value.trim() || null;
-                    if (v !== (r.close_time ?? null)) {
-                      void patchResource(r.id, { close_time: v });
-                    }
-                  }}
-                />
-              </div>
-              <div className="ch-res-block-label mt-3">
-                <IconCalendar size={12} />
-                Open days
-                <button
-                  type="button"
-                  className="ch-btn ch-btn-text h-6 px-1.5 text-[11px]"
-                  disabled={saving || !customDays}
-                  onClick={() =>
-                    void patchResource(r.id, { open_days: null })
-                  }
-                >
-                  {customDays ? "Use store days" : "Using store days"}
-                </button>
-              </div>
-              <div className="ch-res-days" role="group" aria-label="Open days">
-                {WEEKDAY_ORDER.map((day) => {
-                  const on = effectiveDays.includes(day);
-                  return (
-                    <button
-                      key={day}
-                      type="button"
+                <>
+                  <div className="ch-section-head">
+                    <h4 className="ch-section-title">{t("bookings.availability")}</h4>
+                    <span className="ch-hint tabular-nums">
+                      {t("bookings.storeHours", { range: formatHmRange(s.open_time, s.close_time, { hour12 }) })}
+                    </span>
+                  </div>
+                  <div className="ch-hours-row">
+                    <TimeSelect
+                      key={`${r.id}-open-${r.open_time ?? ""}`}
+                      value={r.open_time ?? ""}
+                      allowEmpty
+                      emptyLabel={t("bookings.storeOpens")}
+                      hour12={hour12}
                       disabled={saving}
-                      className={`ch-res-day${on ? " is-on" : ""}`}
-                      aria-pressed={on}
-                      onClick={() => {
-                        const base = customDays
-                          ? [...(r.open_days ?? [])]
-                          : [...s.open_days];
-                        const next = on
-                          ? base.filter((d) => d !== day)
-                          : [...base, day];
-                        if (next.length === 0) return;
-                        void patchResource(r.id, { open_days: next });
+                      aria-label={t("bookings.opens")}
+                      className="w-full px-2.5"
+                      onChange={(v) => {
+                        const next = v || null;
+                        if (next !== (r.open_time ?? null)) {
+                          void patchResource(r.id, { open_time: next });
+                        }
                       }}
-                    >
-                      {weekdayLabel(day)}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </section>
+                    />
+                    <span className="ch-hours-sep">{t("common.to")}</span>
+                    <TimeSelect
+                      key={`${r.id}-close-${r.close_time ?? ""}`}
+                      value={r.close_time ?? ""}
+                      allowEmpty
+                      emptyLabel={t("bookings.storeCloses")}
+                      hour12={hour12}
+                      disabled={saving}
+                      aria-label={t("bookings.closes")}
+                      className="w-full px-2.5"
+                      onChange={(v) => {
+                        const next = v || null;
+                        if (next !== (r.close_time ?? null)) {
+                          void patchResource(r.id, { close_time: next });
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="ch-section-head" style={{ marginTop: "0.75rem" }}>
+                    <h4 className="ch-section-title ch-section-title-sub">{t("bookings.days")}</h4>
+                    {customDays ? (
+                      <button
+                        type="button"
+                        className="ch-btn ch-btn-text h-6 px-1.5"
+                        disabled={saving}
+                        onClick={() => void patchResource(r.id, { open_days: null })}
+                      >
+                        {t("bookings.useStoreDays")}
+                      </button>
+                    ) : (
+                      <span className="ch-hint">{t("bookings.storeDays")}</span>
+                    )}
+                  </div>
+                  <div className="ch-days" role="group" aria-label={t("bookings.openDays")}>
+                    {WEEKDAY_ORDER.map((day) => {
+                      const on = effectiveDays.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          disabled={saving}
+                          className={`ch-day${on ? " is-on" : ""}`}
+                          aria-pressed={on}
+                          onClick={() => {
+                            const base = customDays ? [...(r.open_days ?? [])] : [...s.open_days];
+                            const next = on ? base.filter((d) => d !== day) : [...base, day];
+                            if (next.length === 0) return;
+                            void patchResource(r.id, { open_days: next });
+                          }}
+                        >
+                          {t(WEEK_KEYS[day])}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+        </div>
 
-        {tab === "catalog" ? (
-          <section className="ch-res-block">
-            <div className="ch-res-block-label">Type</div>
-            <select
-              className="ch-input w-full max-w-xs px-2.5 py-1.5 text-[13px]"
-              value={r.kind}
-              disabled={saving}
-              aria-label="Type"
-              onChange={(e) =>
-                void patchResource(r.id, {
-                  kind: e.target.value as ResourceKind,
-                })
-              }
-            >
-              {CATALOG_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {kindLabel(k)}
-                </option>
-              ))}
-            </select>
-          </section>
-        ) : null}
+        <div className="ch-detail-foot">
+          {resourceSavedAt ? (
+            <span className="ch-saved" role="status">
+              <IconCheck size={12} />
+              {t("common.saved", {
+                when: formatAgo(resourceSavedAt, {
+                  justNow: t("common.justNow"),
+                  minAgo: (n) => t("common.minAgo", { n }),
+                }),
+              })}
+            </span>
+          ) : null}
+        </div>
       </div>
     );
   }
 
-  return (
-    <div
-      data-tour="booking-drawer"
-      className="ch-book-dialog ch-desk-page-panel flex h-full min-h-0 w-full flex-col overflow-hidden"
-      aria-labelledby="booking-page-title"
-    >
-      <div className="ch-book-dialog-head">
-        <div className="ch-page-head-start min-w-0">
-          <h2 id="booking-page-title" className="ch-headline ch-book-dialog-title">
-            Bookings
-          </h2>
-          <p className="ch-book-dialog-sub">
-            {pageName
-              ? `Schedule for ${pageName}`
-              : "Schedule for this Page"}
-          </p>
-        </div>
-        <div className="ch-subnav-stack">
-          <nav className="ch-subnav" aria-label="Bookings views">
-            {(
-              [
-                ["schedule", "Schedule"],
-                ["resources", "Resources"],
-                ["setup", "Setup"],
-              ] as const
-            ).map(([id, label]) => {
-              const active =
-                id === "resources" ? isResourcesTab(tab) : tab === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() =>
-                    setTab(
-                      id === "resources"
-                        ? "team"
-                        : (id as "schedule" | "setup"),
-                    )
-                  }
-                  className={`ch-subnav-tab${active ? " is-active" : ""}`}
-                  aria-current={active ? "page" : undefined}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </nav>
-
-          {isResourcesTab(tab) ? (
-              <nav className="ch-subnav" aria-label="Resources sections">
-                <button
-                  type="button"
-                  className={`ch-subnav-tab${tab === "team" ? " is-active" : ""}`}
-                  aria-current={tab === "team" ? "page" : undefined}
-                  onClick={() => {
-                    setTab("team");
-                    setAddingResource(false);
-                    setNewResourceName("");
-                    setSelectedResourceId(null);
-                    setEditingNameId(null);
-                  }}
-                >
-                  Team
-                </button>
-                <button
-                  type="button"
-                  className={`ch-subnav-tab${tab === "catalog" ? " is-active" : ""}`}
-                  aria-current={tab === "catalog" ? "page" : undefined}
-                  onClick={() => {
-                    setTab("catalog");
-                    setAddingResource(false);
-                    setNewResourceName("");
-                    setSelectedResourceId(null);
-                    setEditingNameId(null);
-                  }}
-                >
-                  Services & rooms
-                </button>
-              </nav>
-          ) : null}
-        </div>
-        <div className="ch-page-head-end">
-          {onClose ? (
+  const toolbarEnd =
+    tab === "schedule" ? (
+      <>
+        {activeResources.length > 0 ? (
+          <select
+            className="ch-input ch-input-sm"
+            value={resourcePick}
+            aria-label={t("bookings.resource")}
+            onChange={(e) => {
+              setResourcePick(e.target.value);
+            }}
+          >
+            <option value="any">{t("bookings.anyResource")}</option>
+            {activeResources.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {mode === "hourly" ? (
+          <div className="ch-seg ch-seg-compact" role="group" aria-label={t("bookings.clock")}>
             <button
               type="button"
-              onClick={onClose}
-              className="ch-btn ch-btn-ghost ch-desk-back h-8 shrink-0 gap-1.5 px-2"
-              aria-label="Back to inbox"
+              className={`ch-seg-tab${!hour12 ? " is-active" : ""}`}
+              onClick={() => setHour12(false)}
             >
-              <IconBack size={14} />
-              <span className="text-[12px]">Inbox</span>
+              {t("bookings.h24")}
             </button>
-          ) : null}
-        </div>
+            <button
+              type="button"
+              className={`ch-seg-tab${hour12 ? " is-active" : ""}`}
+              onClick={() => setHour12(true)}
+            >
+              {t("bookings.h12")}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="ch-btn ch-btn-primary h-8 px-3"
+            disabled={!selectedYmd}
+            onClick={() => setSheetOpen(true)}
+          >
+            {t("bookings.newBooking")}
+          </button>
+        )}
+      </>
+    ) : tab === "team" ? (
+      <button
+        type="button"
+        className="ch-btn ch-btn-primary h-8 px-3"
+        disabled={saving}
+        onClick={() => beginAdd("staff")}
+      >
+        {t("bookings.addPerson")}
+      </button>
+    ) : tab === "catalog" ? (
+      <div className="ch-menu-anchor">
+        <button
+          type="button"
+          className="ch-btn ch-btn-primary h-8 px-3"
+          disabled={saving}
+          aria-haspopup="menu"
+          aria-expanded={addMenuOpen}
+          onClick={() => setAddMenuOpen((v) => !v)}
+        >
+          {t("bookings.add")}
+          <IconCaret size={12} />
+        </button>
+        {addMenuOpen ? (
+          <div className="ch-menu ch-menu-sm" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="ch-menu-item"
+              onClick={() => beginAdd("service")}
+            >
+              <ServiceGlyph id="sparkles" size={13} />
+              <span className="ch-menu-item-text">{t("bookings.service")}</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="ch-menu-item"
+              onClick={() => beginAdd("room")}
+            >
+              <ServiceGlyph id="home" size={13} />
+              <span className="ch-menu-item-text">{t("bookings.room")}</span>
+            </button>
+          </div>
+        ) : null}
       </div>
+    ) : null;
 
-      <div className="ch-book-dialog-body">
-          {loading && !settings ? (
-            <p className="ch-book-loading">Loading schedule…</p>
-          ) : tab === "setup" ? (
-            <div key="setup" className="ch-subpage ch-book-setup ch-book-setup-split">
-              <div className="ch-book-setup-left">
-                <aside className="ch-booker-aside ch-book-setup-aside">
-                  <div className="ch-booker-mark" aria-hidden>
-                    <IconCalendar size={16} />
-                  </div>
-                  <div className="ch-booker-host">
-                    {pageName || "Your Page"}
-                  </div>
-                  <h3 className="ch-headline ch-booker-title">How time works</h3>
-                  <ul className="ch-booker-meta">
-                    <li>
-                      <IconClock size={14} />
-                      <span>{bookingModeLabel(mode)}</span>
-                    </li>
-                    <li>
-                      <IconGlobe size={14} />
-                      <span>{s.timezone}</span>
-                    </li>
-                  </ul>
+  return (
+    <div data-tour="booking-drawer" className="ch-page" aria-labelledby="booking-page-title">
+      <DeskToolbar
+        title={t("bookings.title")}
+        titleId="booking-page-title"
+        onBack={onClose}
+        nav={
+          <Segmented
+            value={tab}
+            options={bookingTabs}
+            onChange={(next) => {
+              if (next === "team" || next === "catalog") {
+                setAddingResource(false);
+                setNewResourceName("");
+                setSelectedResourceId(null);
+                setAddMenuOpen(false);
+                setDetailMenuOpen(false);
+                setResourceSavedAt(null);
+              }
+              setTab(next);
+            }}
+            ariaLabel={t("bookings.views")}
+          />
+        }
+        end={toolbarEnd}
+      />
 
-                  <label className="ch-book-setup-toggle">
-                    <span>
-                      <span className="ch-book-setup-toggle-title">Accept bookings</span>
-                      <span className="ch-book-setup-toggle-hint">
-                        Off = desk still stores, AI won’t offer slots
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={s.enabled}
+      {loading && !settings ? (
+        <div className="ch-empty-line">{t("common.loading")}</div>
+      ) : tab === "setup" ? (
+        <div key="setup" className="ch-page-body">
+          <div className="ch-form-2col">
+            <section className="ch-section">
+              <h3 className="ch-section-title">{t("bookings.bookingShape")}</h3>
+              <HelpTip tip="hints.acceptBookings">
+                <label className="ch-toggle">
+                  <input
+                    type="checkbox"
+                    className="ch-check"
+                    checked={s.enabled}
+                    disabled={saving}
+                    onChange={(e) => void saveSettings({ enabled: e.target.checked })}
+                  />
+                  <span>{t("bookings.acceptBookings")}</span>
+                </label>
+              </HelpTip>
+              <div className="ch-modes" role="radiogroup" aria-label={t("bookings.bookingShape")}>
+                {MODES.map((m) => {
+                  const active = s.booking_mode === m;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
                       disabled={saving}
-                      onChange={(e) => void saveSettings({ enabled: e.target.checked })}
-                      className="h-4 w-4"
-                      style={{ accentColor: "var(--chaster-accent)" }}
-                    />
-                  </label>
-                </aside>
+                      onClick={() => void saveSettings({ booking_mode: m })}
+                      className={`ch-mode${active ? " is-active" : ""}`}
+                    >
+                      <span className="ch-mode-dot" aria-hidden />
+                      <span className="ch-mode-text">
+                        <span className="ch-mode-title">{bookingModeLabel(m, t)}</span>
+                        <span className="ch-mode-hint">{bookingModeHint(m, t)}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {s.booking_mode === "hourly" ? (
+                <label className="ch-field">
+                  <span className="ch-label">{t("bookings.slotLength")}</span>
+                  <select
+                    className="ch-input w-full px-2.5 py-2"
+                    value={s.slot_minutes}
+                    disabled={saving}
+                    onChange={(e) => void saveSettings({ slot_minutes: Number(e.target.value) })}
+                  >
+                    {[15, 30, 45, 60, 90, 120].map((n) => (
+                      <option key={n} value={n}>
+                        {t("bookings.nMin", { n })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </section>
 
-                <div className="ch-book-setup-modes">
-                  <div className="ch-book-ledger-head">
-                    <h3 className="ch-headline ch-book-ledger-title">Booking shape</h3>
-                  </div>
-                  <div className="ch-book-modes">
-                    {MODES.map((m) => {
-                      const active = s.booking_mode === m;
-                      return (
-                        <button
-                          key={m}
-                          type="button"
-                          disabled={saving}
-                          onClick={() => void saveSettings({ booking_mode: m })}
-                          className={`ch-book-mode${active ? " is-active" : ""}`}
-                        >
-                          <span className="ch-book-mode-title">{bookingModeLabel(m)}</span>
-                          <span className="ch-book-mode-hint">{bookingModeHint(m)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+            <section className="ch-section">
+              <h3 className="ch-section-title">{t("bookings.hoursRules")}</h3>
+              <div className="ch-grid-2">
+                <label className="ch-field">
+                  <span className="ch-label">{t("bookings.opens")}</span>
+                  <TimeSelect
+                    value={s.open_time}
+                    disabled={saving}
+                    hour12={hour12}
+                    className="w-full px-2.5 py-2"
+                    onChange={(v) => void saveSettings({ open_time: v })}
+                  />
+                </label>
+                <label className="ch-field">
+                  <span className="ch-label">{t("bookings.closes")}</span>
+                  <TimeSelect
+                    value={s.close_time}
+                    disabled={saving}
+                    hour12={hour12}
+                    className="w-full px-2.5 py-2"
+                    onChange={(v) => void saveSettings({ close_time: v })}
+                  />
+                </label>
+              </div>
+
+              <div className="ch-field">
+                <span className="ch-label">{t("bookings.openDays")}</span>
+                <div className="ch-days" role="group" aria-label={t("bookings.openDays")}>
+                  {WEEKDAY_ORDER.map((day) => {
+                    const on = s.open_days.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        disabled={saving}
+                        className={`ch-day${on ? " is-on" : ""}`}
+                        aria-pressed={on}
+                        onClick={() => {
+                          const next = on
+                            ? s.open_days.filter((d) => d !== day)
+                            : [...s.open_days, day];
+                          if (next.length === 0) return;
+                          void saveSettings({ open_days: next });
+                        }}
+                      >
+                        {t(WEEK_KEYS[day])}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
-              <aside className="ch-book-setup-right" aria-label="Hours and rules">
-                <div className="ch-book-ledger-wrap">
-                  <div className="ch-book-ledger-head">
-                    <h3 className="ch-headline ch-book-ledger-title">Hours & rules</h3>
-                    <span className="text-[11px]" style={{ color: "var(--chaster-muted)" }}>
-                      {s.open_time}–{s.close_time}
-                    </span>
-                  </div>
-
-                  <div className="ch-book-setup-fields">
-                    {s.booking_mode === "hourly" && (
-                      <label className="block">
-                        <span className="ch-book-label mb-1.5">Slot length</span>
-                        <select
-                          className="ch-input w-full px-3 py-2 text-[13px]"
-                          value={s.slot_minutes}
-                          disabled={saving}
-                          onChange={(e) =>
-                            void saveSettings({ slot_minutes: Number(e.target.value) })
-                          }
-                        >
-                          {[15, 30, 45, 60, 90, 120].map((n) => (
-                            <option key={n} value={n}>
-                              {n} minutes
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-
-                    <div className="ch-book-setup-grid">
-                      <label className="block">
-                        <span className="ch-book-label mb-1.5">Opens</span>
-                        <input
-                          type="time"
-                          className="ch-input w-full px-3 py-2 text-[13px]"
-                          value={s.open_time}
-                          disabled={saving}
-                          onChange={(e) => void saveSettings({ open_time: e.target.value })}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="ch-book-label mb-1.5">Closes</span>
-                        <input
-                          type="time"
-                          className="ch-input w-full px-3 py-2 text-[13px]"
-                          value={s.close_time}
-                          disabled={saving}
-                          onChange={(e) => void saveSettings({ close_time: e.target.value })}
-                        />
-                      </label>
-
-                      <div className="block" style={{ gridColumn: "1 / -1" }}>
-                        <span className="ch-book-label mb-1.5">Open days</span>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {WEEKDAY_ORDER.map((day) => {
-                            const on = s.open_days.includes(day);
-                            return (
-                              <button
-                                key={day}
-                                type="button"
-                                disabled={saving}
-                                className={`ch-book-buffer-unit${on ? " is-active" : ""}`}
-                                aria-pressed={on}
-                                onClick={() => {
-                                  const next = on
-                                    ? s.open_days.filter((d) => d !== day)
-                                    : [...s.open_days, day];
-                                  if (next.length === 0) return;
-                                  void saveSettings({ open_days: next });
-                                }}
-                              >
-                                {weekdayLabel(day)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="relative block">
-                        <span className="ch-book-label mb-1.5">Buffer between bookings</span>
-                        <select
-                          className="ch-input mt-1 w-full px-3 py-2 text-[13px]"
-                          value={bufferCustom ? "custom" : String(s.buffer_minutes)}
-                          disabled={saving}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            if (v === "custom") {
-                              setBufferCustom(true);
-                              const seed = minutesToCustom(
-                                isBufferPreset(s.buffer_minutes) ? 90 : s.buffer_minutes,
-                              );
-                              setBufferAmount(seed.amount || 1);
-                              setBufferUnit(seed.unit);
-                              return;
-                            }
-                            setBufferCustom(false);
-                            void saveSettings({ buffer_minutes: Number(v) });
-                          }}
-                        >
-                          {BUFFER_PRESETS.map((n) => (
-                            <option key={n} value={n}>
-                              {n === 0 ? "None" : `${n} min`}
-                            </option>
-                          ))}
-                          <option value="custom">Custom…</option>
-                        </select>
-
-                        {bufferCustom && (
-                          <div className="ch-book-buffer-pop" role="group" aria-label="Custom buffer">
-                            <input
-                              type="number"
-                              min={1}
-                              max={bufferUnit === "days" ? 14 : bufferUnit === "hours" ? 336 : 20160}
-                              className="ch-input ch-book-buffer-amount px-2.5 py-1.5 text-[13px]"
-                              value={bufferAmount}
-                              disabled={saving}
-                              onChange={(e) => setBufferAmount(Number(e.target.value) || 0)}
-                            />
-                            <div className="ch-book-buffer-units" role="radiogroup" aria-label="Buffer unit">
-                              {(
-                                [
-                                  ["minutes", "min"],
-                                  ["hours", "hrs"],
-                                  ["days", "days"],
-                                ] as const
-                              ).map(([unit, label]) => (
-                                <button
-                                  key={unit}
-                                  type="button"
-                                  disabled={saving}
-                                  className={`ch-book-buffer-unit${bufferUnit === unit ? " is-active" : ""}`}
-                                  aria-pressed={bufferUnit === unit}
-                                  onClick={() => setBufferUnit(unit)}
-                                >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                            <button
-                              type="button"
-                              className="ch-btn ch-btn-primary h-8 px-2.5 text-[12px]"
-                              disabled={saving || bufferAmount < 1}
-                              onClick={() =>
-                                void saveSettings({
-                                  buffer_minutes: customToMinutes(bufferAmount, bufferUnit),
-                                })
-                              }
-                            >
-                              Apply
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      <label className="block">
-                        <span className="ch-book-label mb-1.5">Book ahead (days)</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={365}
-                          className="ch-input w-full px-3 py-2 text-[13px]"
-                          value={s.max_advance_days}
-                          disabled={saving}
-                          onChange={(e) =>
-                            void saveSettings({
-                              max_advance_days: Number(e.target.value) || 60,
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <label className="block">
-                      <span className="ch-book-label mb-1.5">Timezone</span>
+              <div className="ch-grid-2">
+                <div className="ch-field">
+                  <span className="ch-label">{t("bookings.buffer")}</span>
+                  <select
+                    className="ch-input w-full px-2.5 py-2"
+                    value={bufferCustom ? "custom" : String(s.buffer_minutes)}
+                    disabled={saving}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "custom") {
+                        setBufferCustom(true);
+                        const seed = minutesToCustom(
+                          isBufferPreset(s.buffer_minutes) ? 90 : s.buffer_minutes,
+                        );
+                        setBufferAmount(seed.amount || 1);
+                        setBufferUnit(seed.unit);
+                        return;
+                      }
+                      setBufferCustom(false);
+                      void saveSettings({ buffer_minutes: Number(v) });
+                    }}
+                  >
+                    {BUFFER_PRESETS.map((n) => (
+                      <option key={n} value={n}>
+                        {n === 0 ? t("bookings.none") : t("bookings.nMin", { n })}
+                      </option>
+                    ))}
+                    <option value="custom">{t("bookings.custom")}</option>
+                  </select>
+                  {bufferCustom ? (
+                    <div className="ch-buffer-custom" role="group" aria-label={t("bookings.custom")}>
                       <input
-                        className="ch-input w-full px-3 py-2 text-[12px]"
-                        value={s.timezone}
+                        type="number"
+                        min={1}
+                        max={bufferUnit === "days" ? 14 : bufferUnit === "hours" ? 336 : 20160}
+                        className="ch-input w-20 px-2.5 py-1.5 tabular-nums"
+                        value={bufferAmount}
                         disabled={saving}
-                        onChange={(e) => void saveSettings({ timezone: e.target.value })}
-                        placeholder="Asia/Tbilisi"
+                        onChange={(e) => setBufferAmount(Number(e.target.value) || 0)}
                       />
-                    </label>
-                  </div>
-                </div>
-              </aside>
-            </div>
-          ) : isResourcesTab(tab) ? (
-            <div
-              key={tab}
-              className={`ch-subpage ch-book-resources ch-book-resources-split${selectedResource ? " has-selection" : ""}`}
-            >
-              <div className="ch-res-pane ch-res-pane-list" aria-label="Catalog list">
-                <header className="ch-res-section-head">
-                  <div>
-                    <p className="ch-res-eyebrow">
-                      {tab === "team" ? "People" : "What customers book"}
-                    </p>
-                    <h3 className="ch-headline ch-book-ledger-title">
-                      {tab === "team" ? "Team members" : "Services & rooms"}
-                    </h3>
-                    <p className="ch-res-lead">
-                      {tab === "team"
-                        ? "Add the people who take appointments. Connect them to services under Services & rooms."
-                        : "Add services, rooms, or equipment. Open a service to choose who can provide it."}
-                    </p>
-                  </div>
-                  <div className="ch-res-add-row" role="group" aria-label="Add">
-                    {tab === "team" ? (
+                      <div className="ch-seg ch-seg-compact" role="radiogroup" aria-label={t("bookings.unitMin")}>
+                        {(
+                          [
+                            ["minutes", t("bookings.unitMin")],
+                            ["hours", t("bookings.unitHrs")],
+                            ["days", t("bookings.unitDays")],
+                          ] as const
+                        ).map(([unit, label]) => (
+                          <button
+                            key={unit}
+                            type="button"
+                            disabled={saving}
+                            className={`ch-seg-tab${bufferUnit === unit ? " is-active" : ""}`}
+                            aria-pressed={bufferUnit === unit}
+                            onClick={() => setBufferUnit(unit)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
                       <button
                         type="button"
-                        className="ch-res-add-chip"
-                        disabled={saving}
-                        onClick={() => beginAdd("staff")}
-                      >
-                        <IconUser size={13} />
-                        Add team member
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="ch-res-add-chip"
-                          disabled={saving}
-                          onClick={() => beginAdd("service")}
-                        >
-                          <IconLayers size={13} />
-                          Add service
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-res-add-chip"
-                          disabled={saving}
-                          onClick={() => beginAdd("room")}
-                        >
-                          <IconLink size={13} />
-                          Add room
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-res-add-chip"
-                          disabled={saving}
-                          onClick={() => beginAdd("equipment")}
-                        >
-                          <IconLink size={13} />
-                          Add equipment
-                        </button>
-                      </>
-                    )}
-                  </div>
-
-                  {addingResource ? (
-                    <div className="ch-res-compose-inline">
-                      <span className="ch-res-compose-kind">
-                        {kindLabel(newResourceKind)}
-                      </span>
-                      <input
-                        className="ch-input flex-1 px-2.5 py-1.5 text-[13px]"
-                        autoFocus
-                        value={newResourceName}
-                        disabled={saving}
-                        placeholder={
-                          newResourceKind === "staff"
-                            ? "e.g. Nika"
-                            : newResourceKind === "service"
-                              ? "e.g. Haircut"
-                              : newResourceKind === "equipment"
-                                ? "e.g. Chair 1"
-                                : "e.g. Room 2"
+                        className="ch-btn ch-btn-ghost h-8 px-2.5"
+                        disabled={saving || bufferAmount < 1}
+                        onClick={() =>
+                          void saveSettings({
+                            buffer_minutes: customToMinutes(bufferAmount, bufferUnit),
+                          })
                         }
-                        onChange={(e) => setNewResourceName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            void addResource();
-                          }
-                          if (e.key === "Escape") {
-                            setAddingResource(false);
-                            setNewResourceName("");
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="ch-btn ch-btn-primary h-8 px-3 text-[12px]"
-                        disabled={saving || !newResourceName.trim()}
-                        onClick={() => void addResource()}
                       >
-                        Add
-                      </button>
-                      <button
-                        type="button"
-                        className="ch-btn ch-btn-text h-8 px-2 text-[12px]"
-                        disabled={saving}
-                        onClick={() => {
-                          setAddingResource(false);
-                          setNewResourceName("");
-                        }}
-                      >
-                        Cancel
+                        {t("bookings.apply")}
                       </button>
                     </div>
                   ) : null}
-                </header>
-
-                {sectionResources.length === 0 ? (
-                  <div className="ch-res-empty">
-                    {tab === "team" ? (
-                      <>
-                        <ol className="ch-res-steps">
-                          <li>
-                            <strong>1.</strong> Add each person who takes bookings
-                          </li>
-                          <li>
-                            <strong>2.</strong> Switch to Services & rooms and
-                            connect them to what they offer
-                          </li>
-                        </ol>
-                        <p className="ch-res-empty-hint">
-                          No team yet — or leave empty if one shared calendar is enough.
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <ol className="ch-res-steps">
-                          <li>
-                            <strong>1.</strong> Add a service (what customers book)
-                          </li>
-                          <li>
-                            <strong>2.</strong> Open it and check who can provide it
-                          </li>
-                        </ol>
-                        <p className="ch-res-empty-hint">
-                          Rooms and equipment are optional — use them when capacity matters.
-                        </p>
-                      </>
-                    )}
+                </div>
+                <label className="ch-field">
+                  <span className="ch-label">{t("bookings.bookAhead")}</span>
+                  <div className="ch-input-suffix">
+                    <input
+                      type="number"
+                      min={1}
+                      max={365}
+                      className="ch-input w-full px-2.5 py-2 tabular-nums"
+                      value={s.max_advance_days}
+                      disabled={saving}
+                      onChange={(e) =>
+                        void saveSettings({ max_advance_days: Number(e.target.value) || 60 })
+                      }
+                    />
+                    <span>{t("bookings.daysSuffix")}</span>
                   </div>
-                ) : (
-                  <ul className="ch-res-roster">
-                    {sectionResources.map((r) => {
-                      const summary = linkSummary(r, resources);
-                      const selected = selectedResourceId === r.id;
-                      const renaming = editingNameId === r.id;
-                      return (
-                        <li
-                          key={r.id}
-                          className={`ch-res-roster-item${selected ? " is-open" : ""}`}
-                        >
-                          <div
-                            className={`ch-res-mail-row${selected ? " is-selected" : ""}${r.active ? "" : " is-inactive"}`}
-                            role="button"
-                            tabIndex={0}
-                            aria-expanded={selected}
-                            aria-current={selected ? "true" : undefined}
-                            onClick={() => {
-                              setSelectedResourceId((prev) =>
-                                prev === r.id ? null : r.id,
-                              );
-                              setAddingResource(false);
-                              if (editingNameId && editingNameId !== r.id) {
-                                setEditingNameId(null);
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                setSelectedResourceId((prev) =>
-                                  prev === r.id ? null : r.id,
-                                );
-                              }
-                            }}
-                          >
-                            <span className="ch-res-kind-mark" aria-hidden>
-                              <KindMark kind={r.kind} />
-                            </span>
-                            <span className="ch-res-row-body">
-                              {renaming ? (
-                                <input
-                                  className="ch-input ch-res-rename-input"
-                                  autoFocus
-                                  value={editNameDraft}
-                                  disabled={saving}
-                                  aria-label="Edit name"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onChange={(e) =>
-                                    setEditNameDraft(e.target.value)
-                                  }
-                                  onBlur={() => void commitRename(r.id)}
-                                  onKeyDown={(e) => {
-                                    e.stopPropagation();
-                                    if (e.key === "Enter") {
-                                      e.preventDefault();
-                                      void commitRename(r.id);
-                                    }
-                                    if (e.key === "Escape") {
-                                      e.preventDefault();
-                                      setEditingNameId(null);
-                                    }
-                                  }}
-                                />
-                              ) : (
-                                <span className="ch-res-row-top">
-                                  <span className="ch-res-row-name">{r.name}</span>
-                                  <span className="ch-res-row-type">
-                                    {kindLabel(r.kind)}
-                                  </span>
-                                </span>
-                              )}
-                              {!renaming ? (
-                                <span
-                                  className={`ch-res-row-sum is-${summary.tone}`}
-                                >
-                                  {summary.line}
-                                </span>
-                              ) : null}
-                            </span>
-                            <span className="ch-res-row-actions">
-                              <button
-                                type="button"
-                                className="ch-res-quick-btn"
-                                disabled={saving}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedResourceId(r.id);
-                                  setEditingNameId(r.id);
-                                  setEditNameDraft(r.name);
-                                }}
-                              >
-                                Edit name
-                              </button>
-                              <button
-                                type="button"
-                                className="ch-res-quick-btn is-danger"
-                                disabled={saving}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void removeResource(r.id);
-                                }}
-                              >
-                                Delete
-                              </button>
-                            </span>
-                          </div>
-                          {selected ? (
-                            <div className="ch-res-mobile-expand">
-                              {renderResourceEditor(r, {
-                                showIdentity: false,
-                              })}
-                            </div>
-                          ) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                </label>
               </div>
 
-              <aside
-                className="ch-res-pane ch-res-pane-detail ch-res-desktop-detail"
-                aria-label="Selected details"
-              >
-                {!selectedResource ? (
-                  <div className="ch-res-detail-empty">
-                    <div className="ch-booker-mark" aria-hidden>
-                      <IconLayers size={16} />
-                    </div>
-                    <h3 className="ch-headline ch-book-ledger-title">
-                      Pick one to edit
-                    </h3>
-                    <p className="ch-res-lead">
-                      Choose a name on the left to see hours, connections, and
-                      other settings.
-                    </p>
-                  </div>
-                ) : (
-                  renderResourceEditor(selectedResource)
-                )}
-              </aside>
-            </div>
-          ) : (
-            <div key="schedule" className="ch-subpage ch-book-schedule ch-book-schedule-split">
-              <div className="ch-book-schedule-left">
-                <div className="ch-booker">
-                  <aside className="ch-booker-aside">
-                    <div className="ch-booker-mark" aria-hidden>
-                      <IconCalendar size={16} />
-                    </div>
-                    <div className="ch-booker-host">
-                      {pageName || "Your Page"}
-                    </div>
-                    <h3 className="ch-headline ch-booker-title">
-                      {serviceLabel.trim() || bookingModeLabel(mode)}
-                    </h3>
-                    <ul className="ch-booker-meta">
-                      <li>
-                        <IconClock size={14} />
-                        <span>{durationLabel}</span>
-                      </li>
-                      <li>
-                        <IconCalendar size={14} />
-                        <span>{bookingModeLabel(mode)}</span>
-                      </li>
-                      <li>
-                        <IconGlobe size={14} />
-                        <span>{s.timezone}</span>
-                      </li>
-                    </ul>
-
-                    <div className="ch-booker-fields">
-                      <label className="block">
-                        <span className="ch-book-label">Customer</span>
-                        <input
-                          className="ch-input mt-1 w-full px-2.5 py-1.5 text-[13px]"
-                          value={customerName}
-                          onChange={(e) => setCustomerName(e.target.value)}
-                          placeholder="Who is this for?"
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="ch-book-label">Service</span>
-                        <input
-                          className="ch-input mt-1 w-full px-2.5 py-1.5 text-[13px]"
-                          value={serviceLabel}
-                          onChange={(e) => setServiceLabel(e.target.value)}
-                          placeholder="Haircut, room, table…"
-                        />
-                      </label>
-                      {activeResources.length > 0 && (
-                        <label className="block">
-                          <span className="ch-book-label">Resource</span>
-                          <select
-                            className="ch-input mt-1 w-full px-2.5 py-1.5 text-[13px]"
-                            value={resourcePick}
-                            onChange={(e) => {
-                              setResourcePick(e.target.value);
-                              setSelectedSlot(null);
-                            }}
-                          >
-                            <option value="any">Any available</option>
-                            {activeResources.map((r) => (
-                              <option key={r.id} value={r.id}>
-                                {r.name} ({kindLabel(r.kind)})
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                      <label className="block">
-                        <span className="ch-book-label">Notes</span>
-                        <textarea
-                          className="ch-input mt-1 w-full resize-y px-2.5 py-1.5 text-[13px]"
-                          rows={2}
-                          value={notes}
-                          onChange={(e) => setNotes(e.target.value)}
-                          placeholder="Optional"
-                        />
-                      </label>
-                      {focusPeerId && (
-                        <label className="flex items-center gap-2 text-[12px]">
-                          <input
-                            type="checkbox"
-                            checked={linkPeer}
-                            onChange={(e) => setLinkPeer(e.target.checked)}
-                            style={{ accentColor: "var(--chaster-accent)" }}
-                          />
-                          <span style={{ color: "var(--chaster-muted)" }}>
-                            Link to this chat
-                            {focusPeerName ? ` (${focusPeerName})` : ""}
-                          </span>
-                        </label>
-                      )}
-                    </div>
-                  </aside>
-
-                  <div className="ch-booker-pick">
-                    <section className="ch-booker-cal" aria-label="Calendar">
-                      <div className="ch-booker-cal-head">
-                        <h3 className="ch-headline ch-booker-cal-month">
-                          {formatMonthTitle(viewYear, viewMonth)}
-                        </h3>
-                        <div className="ch-booker-cal-nav">
-                          <button
-                            type="button"
-                            className="ch-booker-nav-btn"
-                            aria-label="Previous month"
-                            onClick={() => shiftMonth(-1)}
-                          >
-                            <IconChevron dir="left" size={16} />
-                          </button>
-                          <button
-                            type="button"
-                            className="ch-booker-nav-btn"
-                            aria-label="Next month"
-                            onClick={() => shiftMonth(1)}
-                          >
-                            <IconChevron dir="right" size={16} />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="ch-booker-weekdays">
-                        {WEEKDAYS.map((d) => (
-                          <span key={d}>{d}</span>
-                        ))}
-                      </div>
-
-                      <div className="ch-booker-grid">
-                        {cells.map((day, i) => {
-                          if (day == null) {
-                            return <span key={`e-${i}`} className="ch-booker-cell is-empty" />;
-                          }
-                          const ymd = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                          const past = isPastOrBeyond(ymd);
-                          const selectable = isDaySelectable(ymd);
-                          const selected = ymd === selectedYmd;
-                          const rangeEnd = ymd === rangeEndYmd;
-                          const ranged = inRange(ymd);
-                          const available = !past && (mode === "multi_day" || selectable);
-
-                          return (
-                            <button
-                              key={ymd}
-                              type="button"
-                              disabled={past || (mode !== "multi_day" && !selectable)}
-                              onClick={() => pickDay(day)}
-                              className={[
-                                "ch-booker-cell",
-                                available ? "is-available" : "",
-                                selected || rangeEnd ? "is-selected" : "",
-                                ranged && !selected && !rangeEnd ? "is-range" : "",
-                                past ? "is-past" : "",
-                              ]
-                                .filter(Boolean)
-                                .join(" ")}
-                            >
-                              {day}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {mode === "multi_day" && (
-                        <p className="ch-booker-hint">
-                          {rangeEndYmd
-                            ? `${selectedYmd} → ${rangeEndYmd}`
-                            : "Select check-in, then check-out"}
-                        </p>
-                      )}
-                    </section>
-
-                    <section className="ch-booker-slots" aria-label="Selection">
-                      <div className="ch-booker-slots-head">
-                        <span className="ch-headline ch-booker-slots-day">
-                          {formatDayHeader(selectedYmd)}
-                        </span>
-                        {mode === "hourly" && (
-                          <div className="ch-booker-hour-toggle" role="group" aria-label="Time format">
-                            <button
-                              type="button"
-                              className={!hour12 ? "is-active" : ""}
-                              onClick={() => setHour12(false)}
-                            >
-                              24h
-                            </button>
-                            <button
-                              type="button"
-                              className={hour12 ? "is-active" : ""}
-                              onClick={() => setHour12(true)}
-                            >
-                              12h
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {mode === "hourly" ? (
-                        <div className="ch-booker-slot-list">
-                          {slots.length === 0 ? (
-                            <p className="ch-booker-hint">No slots this day</p>
-                          ) : (
-                            slots.map(({ local, taken }) => (
-                              <button
-                                key={local}
-                                type="button"
-                                disabled={taken}
-                                onClick={() => setSelectedSlot(local)}
-                                className={`ch-booker-slot${selectedSlot === local ? " is-selected" : ""}${taken ? " is-taken" : ""}`}
-                              >
-                                {formatSlotLabel(local, hour12)}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      ) : (
-                        <p className="ch-booker-hint">
-                          {mode === "day"
-                            ? isDaySelectable(selectedYmd)
-                              ? `Book the full day · ${s.open_time}–${s.close_time}`
-                              : "This day isn’t available"
-                            : rangeEndYmd
-                              ? "Range ready — confirm below"
-                              : "Tap a second date for check-out"}
-                        </p>
-                      )}
-
-                      <div className="ch-booker-confirm">
-                        <button
-                          type="button"
-                          disabled={saving || !canConfirm}
-                          className="ch-btn ch-btn-primary h-9 w-full justify-center"
-                          onClick={() => void createBooking()}
-                        >
-                          {saving
-                            ? "Saving…"
-                            : mode === "hourly"
-                              ? selectedSlot
-                                ? "Add to ledger"
-                                : "Pick a time"
-                              : mode === "day"
-                                ? canConfirm
-                                  ? "Confirm day"
-                                  : "Pick a day"
-                                : rangeEndYmd
-                                  ? "Confirm stay"
-                                  : "Pick check-out"}
-                        </button>
-                      </div>
-                    </section>
-                  </div>
-                </div>
-              </div>
-
-              <aside className="ch-book-schedule-right" aria-label="On the book">
-                <div className="ch-book-ledger-wrap">
-                  <div className="ch-book-ledger-head">
-                    <h3 className="ch-headline ch-book-ledger-title">On the book</h3>
-                    <div className="flex items-center gap-3">
-                      {focusPeerId && (
-                        <label className="flex items-center gap-1.5 text-[12px]" style={{ color: "var(--chaster-muted)" }}>
-                          <input
-                            type="checkbox"
-                            checked={peerOnly}
-                            onChange={(e) => setPeerOnly(e.target.checked)}
-                            style={{ accentColor: "var(--chaster-accent)" }}
-                          />
-                          This chat only
-                        </label>
-                      )}
-                      <span className="text-[11px]" style={{ color: "var(--chaster-muted)" }}>
-                        {String(upcoming.length).padStart(2, "0")}
-                      </span>
-                    </div>
-                  </div>
-
-                  {upcoming.length === 0 ? (
-                    <p className="ch-book-empty">
-                      No upcoming appointments. Pick a date and time, or wait for AI bookings.
-                    </p>
-                  ) : (
-                    <ul className="ch-book-ledger">
-                      {upcoming.map((b) => (
-                        <li key={b.id} className="ch-book-row">
-                          <div className="ch-book-row-main">
-                            <div className="ch-book-row-top">
-                              <span className="ch-book-when">
-                                {formatBookingWhen(b.starts_at, b.ends_at, mode)}
-                              </span>
-                              <span className={`ch-book-status is-${b.status}`}>
-                                {statusLabel(b.status)}
-                              </span>
-                            </div>
-                            <div className="ch-book-who">
-                              {b.customer_name || "Unnamed"}
-                              {b.service_label ? ` · ${b.service_label}` : ""}
-                              {b.resource_id && resourceNameById.get(b.resource_id)
-                                ? ` · ${resourceNameById.get(b.resource_id)}`
-                                : ""}
-                              {b.assigned_resource_id &&
-                              resourceNameById.get(b.assigned_resource_id)
-                                ? ` → ${resourceNameById.get(b.assigned_resource_id)}`
-                                : ""}
-                            </div>
-                            <div className="ch-book-meta">
-                              {b.source === "ai" ? "Booked by AI" : "Logged on desk"}
-                              {b.peer_id ? " · linked chat" : ""}
-                            </div>
-                          </div>
-                          <div className="ch-book-row-actions">
-                            {b.status === "confirmed" || b.status === "pending" ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="ch-btn ch-btn-text h-8 px-2 text-[11px]"
-                                  disabled={saving}
-                                  onClick={() => void setStatus(b.id, "completed")}
-                                >
-                                  Done
-                                </button>
-                                <button
-                                  type="button"
-                                  className="ch-btn ch-btn-text h-8 px-2 text-[11px]"
-                                  style={{ color: "var(--chaster-danger-text)" }}
-                                  disabled={saving}
-                                  onClick={() => void setStatus(b.id, "cancelled")}
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                className="ch-btn ch-btn-text h-8 px-2 text-[11px]"
-                                disabled={saving}
-                                onClick={() => void setStatus(b.id, "confirmed")}
-                              >
-                                Restore
-                              </button>
-                            )}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </aside>
-            </div>
-          )}
+              <label className="ch-field">
+                <span className="ch-label">{t("bookings.timezone")}</span>
+                <input
+                  className="ch-input w-full px-2.5 py-2"
+                  value={s.timezone}
+                  disabled={saving}
+                  onChange={(e) => void saveSettings({ timezone: e.target.value })}
+                />
+              </label>
+            </section>
+          </div>
         </div>
+      ) : isResourcesTab(tab) ? (
+        <div key={tab} className={`ch-split${selectedResource ? " has-selection" : ""}`}>
+          <section className="ch-split-list" aria-label={tab === "team" ? t("bookings.team") : t("bookings.servicesRooms")}>
+            <div className="ch-rail-head">
+              <h3 className="ch-rail-title">
+                {tab === "team"
+                  ? t("bookings.teamCount", { n: sectionResources.length, people: sectionResources.length === 1 ? t("common.person") : t("common.people") })
+                  : t("bookings.servicesRooms")}
+              </h3>
+            </div>
+            {addingResource ? (
+              <div className="ch-compose-row">
+                <span className="ch-compose-kind">{kindLabel(newResourceKind, t)}</span>
+                <input
+                  className="ch-input flex-1 px-2.5 py-1.5"
+                  autoFocus
+                  value={newResourceName}
+                  disabled={saving}
+                  placeholder={t("common.name")}
+                  onChange={(e) => setNewResourceName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void addResource();
+                    }
+                    if (e.key === "Escape") {
+                      setAddingResource(false);
+                      setNewResourceName("");
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ch-btn ch-btn-primary h-8 px-3"
+                  disabled={saving || !newResourceName.trim()}
+                  onClick={() => void addResource()}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  className="ch-btn ch-btn-text h-8 w-8 px-0"
+                  aria-label={t("common.cancel")}
+                  disabled={saving}
+                  onClick={() => {
+                    setAddingResource(false);
+                    setNewResourceName("");
+                  }}
+                >
+                  <IconClose size={13} />
+                </button>
+              </div>
+            ) : null}
+
+            {sectionResources.length === 0 ? (
+              <div className="ch-empty-line">
+                {tab === "team" ? t("bookings.noTeam") : t("bookings.noServicesRooms")}
+              </div>
+            ) : tab === "team" ? (
+              <ul className="ch-list">
+                {sectionResources.map((r) => renderResourceListItem(r))}
+              </ul>
+            ) : (
+              <>
+                {catalogServices.length > 0 ? (
+                  <>
+                    <div className="ch-group-head">
+                      <h4 className="ch-group-title">{t("bookings.services")}</h4>
+                      <span className="ch-group-count tabular-nums">{catalogServices.length}</span>
+                    </div>
+                    <ul className="ch-list">
+                      {catalogServices.map((r) => renderResourceListItem(r))}
+                    </ul>
+                  </>
+                ) : null}
+                {catalogRooms.length > 0 ? (
+                  <>
+                    <div className="ch-group-head">
+                      <h4 className="ch-group-title">{t("bookings.rooms")}</h4>
+                      <span className="ch-group-count tabular-nums">{catalogRooms.length}</span>
+                    </div>
+                    <ul className="ch-list">
+                      {catalogRooms.map((r) => renderResourceListItem(r))}
+                    </ul>
+                  </>
+                ) : null}
+              </>
+            )}
+          </section>
+
+          <aside className="ch-split-detail" aria-label="Details">
+            {!selectedResource ? (
+              <div className="ch-empty-line">{t("bookings.selectToEdit")}</div>
+            ) : (
+              renderResourceEditor(selectedResource)
+            )}
+          </aside>
+        </div>
+      ) : (
+        <div key="schedule" className="ch-schedule">
+          <div className="ch-schedule-main">
+            <section className="ch-cal" aria-label="Calendar">
+              <div className="ch-cal-head">
+                <h3 className="ch-cal-month">{formatMonthTitle(viewYear, viewMonth)}</h3>
+                <div className="ch-cal-nav">
+                  <button
+                    type="button"
+                    className="ch-btn ch-btn-text h-7 w-7 px-0"
+                    aria-label={t("common.back")}
+                    onClick={() => shiftMonth(-1)}
+                  >
+                    <IconChevron dir="left" size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ch-btn ch-btn-text h-7 px-2"
+                    onClick={() => {
+                      setViewYear(today.getFullYear());
+                      setViewMonth(today.getMonth());
+                      setSelectedYmd(todayYmd);
+                      setSelectedSlot(null);
+                    }}
+                  >
+                    {t("bookings.today")}
+                  </button>
+                  <button
+                    type="button"
+                    className="ch-btn ch-btn-text h-7 w-7 px-0"
+                    aria-label={t("tour.next")}
+                    onClick={() => shiftMonth(1)}
+                  >
+                    <IconChevron dir="right" size={15} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="ch-cal-weekdays">
+                {weekdays.map((d, i) => (
+                  <span key={`${d}-${i}`}>{d}</span>
+                ))}
+              </div>
+
+              <div className="ch-cal-grid">
+                {cells.map((day, i) => {
+                  if (day == null) {
+                    return <span key={`e-${i}`} className="ch-cal-cell is-empty" />;
+                  }
+                  const ymd = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                  const pastDay = isPastOrBeyond(ymd);
+                  const selectable = isDaySelectable(ymd);
+                  const selected = ymd === selectedYmd;
+                  const rangeEnd = ymd === rangeEndYmd;
+                  const ranged = inRange(ymd);
+                  const closed = !pastDay && !isDayOpen(ymd);
+                  const disabled = pastDay || (mode !== "multi_day" && !selectable && !closed && !bookedYmds.has(ymd));
+                  return (
+                    <button
+                      key={ymd}
+                      type="button"
+                      disabled={disabled && !bookedYmds.has(ymd)}
+                      onClick={() => {
+                        if (bookedYmds.has(ymd) && (pastDay || !selectable)) {
+                          setSelectedYmd(ymd);
+                          setSelectedSlot(null);
+                          return;
+                        }
+                        pickDay(day);
+                      }}
+                      className={[
+                        "ch-cal-cell",
+                        selected || rangeEnd ? "is-selected" : "",
+                        ranged && !selected && !rangeEnd ? "is-range" : "",
+                        pastDay ? "is-past" : "",
+                        closed ? "is-closed" : "",
+                        ymd === todayYmd ? "is-today" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
+                      <span className="ch-cal-num tabular-nums">{day}</span>
+                      {bookedYmds.has(ymd) ? <span className="ch-cal-dot" aria-hidden /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="ch-cal-legend">
+                <span className="ch-cal-legend-item">
+                  <span className="ch-cal-dot is-static" aria-hidden /> {t("bookings.booked")}
+                </span>
+                <span className="ch-cal-legend-item">
+                  <span className="ch-cal-legend-closed" aria-hidden /> {t("bookings.closed")}
+                </span>
+              </div>
+            </section>
+
+            <section className="ch-timeline-wrap" aria-label="Day">
+              <div className="ch-timeline-head">
+                <h3 className="ch-timeline-day">{formatDayHeader(selectedYmd)}</h3>
+                <span className="ch-timeline-count tabular-nums">
+                  {dayBookings.length === 0
+                    ? t("bookings.free")
+                    : t("bookings.nBooked", { n: dayBookings.length })}
+                </span>
+              </div>
+
+              {mode === "hourly" ? (
+                !isDayOpen(selectedYmd) ? (
+                  <div className="ch-empty-line">{t("bookings.closed")}</div>
+                ) : (
+                  <div className="ch-timeline-scroll">
+                    <div className="ch-timeline" style={{ height: timelineHeight }}>
+                      {hourMarks.map((m) => {
+                        const top = (m - openMin) * pxPerMin;
+                        const d = new Date(2000, 0, 1, Math.floor(m / 60), m % 60);
+                        return (
+                          <div key={m} className="ch-timeline-hour" style={{ top }}>
+                            <span className="ch-timeline-hour-label tabular-nums">
+                              {formatClock(d, { hour12, compact: true })}
+                            </span>
+                          </div>
+                        );
+                      })}
+
+                      {slots.map(({ local, taken }) => {
+                        const start = new Date(local);
+                        const startMin = start.getHours() * 60 + start.getMinutes();
+                        const top = (startMin - openMin) * pxPerMin;
+                        const isPastSlot = +start + s.slot_minutes * 60_000 <= nowTick;
+                        const active = selectedSlot === local && sheetOpen;
+                        if (taken) return null;
+                        return (
+                          <button
+                            key={local}
+                            type="button"
+                            disabled={isPastSlot}
+                            className={`ch-timeline-free${active ? " is-active" : ""}${isPastSlot ? " is-past" : ""}`}
+                            style={{ top, height: SLOT_ROW_PX }}
+                            onClick={() => openSheetForSlot(local)}
+                            aria-label={`Book ${formatSlotLabel(local, hour12)}`}
+                          >
+                            <span className="ch-timeline-free-label tabular-nums">
+                              {formatSlotLabel(local, hour12)}
+                            </span>
+                            <span className="ch-timeline-free-cta">{t("bookings.book")}</span>
+                          </button>
+                        );
+                      })}
+
+                      {dayBookings.map((b) => {
+                        const a = new Date(b.starts_at);
+                        const e = new Date(b.ends_at);
+                        const startMin = a.getHours() * 60 + a.getMinutes();
+                        const endMin = e.getHours() * 60 + e.getMinutes();
+                        const top = Math.max(0, (startMin - openMin) * pxPerMin);
+                        const height = Math.max(
+                          22,
+                          (Math.min(endMin, closeMin) - Math.max(startMin, openMin)) * pxPerMin - 2,
+                        );
+                        const { head, staff } = resourceLine(b);
+                        return (
+                          <div
+                            key={b.id}
+                            className={`ch-timeline-block is-${b.status}`}
+                            style={{ top, height }}
+                            title={`${b.customer_name || t("bookings.unnamed")}${head ? ` · ${head}` : ""}`}
+                          >
+                            <span className="ch-timeline-block-time tabular-nums">
+                              {formatClockRange(a, e, { hour12 })}
+                            </span>
+                            <span className="ch-timeline-block-who">
+                              <span className="ch-timeline-block-name">
+                                {b.customer_name || t("bookings.unnamed")}
+                              </span>
+                              {head ? <span className="ch-timeline-block-svc"> · {head}</span> : null}
+                              {staff ? <span className="ch-timeline-block-svc"> → {staff}</span> : null}
+                            </span>
+                          </div>
+                        );
+                      })}
+
+                      {nowOffsetPx != null && nowOffsetPx >= 0 && nowOffsetPx <= timelineHeight ? (
+                        <div className="ch-timeline-now" style={{ top: nowOffsetPx }} aria-hidden>
+                          <span className="ch-timeline-now-label tabular-nums">
+                            {formatClock(nowTick, { hour12 })}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              ) : (
+                <div className="ch-day-summary">
+                  {dayBookings.length === 0 ? (
+                    <div className="ch-empty-line">{t("bookings.nothingBooked")}</div>
+                  ) : (
+                    <ul className="ch-ledger">{dayBookings.map((b) => renderLedgerRow(b, "upcoming"))}</ul>
+                  )}
+                  {mode === "multi_day" ? (
+                    <p className="ch-hint" style={{ padding: "0 1rem" }}>
+                      {rangeEndYmd
+                        ? `${formatDayHeader(selectedYmd)} → ${formatDayHeader(rangeEndYmd)}`
+                        : t("bookings.pickCheckInOut")}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </section>
+          </div>
+
+          <aside className="ch-ledger-pane" aria-label={t("bookings.onTheBook")}>
+            <div className="ch-ledger-head">
+              <h3 className="ch-ledger-title">{t("bookings.upcoming")}</h3>
+              <div className="ch-ledger-head-end">
+                {focusPeerId ? (
+                  <label className="ch-toggle ch-toggle-sm">
+                    <input
+                      type="checkbox"
+                      className="ch-check"
+                      checked={peerOnly}
+                      onChange={(e) => setPeerOnly(e.target.checked)}
+                    />
+                    {t("bookings.thisChat")}
+                  </label>
+                ) : null}
+                <span className="ch-ledger-count tabular-nums">{upcoming.length}</span>
+              </div>
+            </div>
+            <div className="ch-ledger-scroll">
+              {upcoming.length === 0 ? (
+                <div className="ch-empty-line">{t("bookings.nothingUpcoming")}</div>
+              ) : (
+                <ul className="ch-ledger">{upcoming.map((b) => renderLedgerRow(b, "upcoming"))}</ul>
+              )}
+
+              {past.length > 0 ? (
+                <>
+                  <div className="ch-ledger-head is-sub">
+                    <h3 className="ch-ledger-title">{t("bookings.past")}</h3>
+                    <span className="ch-ledger-count tabular-nums">{past.length}</span>
+                  </div>
+                  <ul className="ch-ledger is-past">{past.map((b) => renderLedgerRow(b, "past"))}</ul>
+                </>
+              ) : null}
+            </div>
+          </aside>
+
+          {sheetOpen ? (
+            <>
+              <button
+                type="button"
+                className="ch-sheet-scrim"
+                aria-label={t("common.close")}
+                onClick={() => setSheetOpen(false)}
+              />
+              <form
+                className="ch-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="booking-sheet-title"
+                onSubmit={(e) => void saveBooking(e)}
+              >
+                <div className="ch-sheet-head">
+                  <div className="min-w-0">
+                    <h3 id="booking-sheet-title" className="ch-sheet-title">
+                      {editingId ? t("bookings.editBooking") : t("bookings.newBooking")}
+                    </h3>
+                    <div className="ch-sheet-when tabular-nums">{sheetWhen}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="ch-btn ch-btn-text h-8 w-8 px-0"
+                    aria-label={t("common.close")}
+                    onClick={closeSheet}
+                  >
+                    <IconClose size={14} />
+                  </button>
+                </div>
+
+                <div className="ch-sheet-body">
+                  {mode === "hourly" ? (
+                    <label className="ch-field">
+                      <span className="ch-label">{t("bookings.time")}</span>
+                      <select
+                        className="ch-input w-full px-2.5 py-2 tabular-nums"
+                        value={selectedSlot ?? ""}
+                        onChange={(e) => setSelectedSlot(e.target.value || null)}
+                      >
+                        <option value="">{t("bookings.pickATime")}</option>
+                        {slots.map(({ local, taken }) => (
+                          <option key={local} value={local} disabled={taken}>
+                            {formatSlotLabel(local, hour12)}
+                            {taken ? t("bookings.bookedSuffix") : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  <label className="ch-field">
+                    <span className="ch-label">{t("bookings.customer")}</span>
+                    <input
+                      className="ch-input w-full px-2.5 py-2"
+                      value={customerName}
+                      autoFocus
+                      onChange={(e) => setCustomerName(e.target.value)}
+                    />
+                  </label>
+                  <label className="ch-field">
+                    <span className="ch-label">{t("bookings.service")}</span>
+                    <input
+                      className="ch-input w-full px-2.5 py-2"
+                      value={serviceLabel}
+                      onChange={(e) => setServiceLabel(e.target.value)}
+                    />
+                  </label>
+                  {activeResources.length > 0 ? (
+                    <label className="ch-field">
+                      <span className="ch-label">{t("bookings.resource")}</span>
+                      <select
+                        className="ch-input w-full px-2.5 py-2"
+                        value={resourcePick}
+                        onChange={(e) => {
+                          setResourcePick(e.target.value);
+                        }}
+                      >
+                        <option value="any">{t("bookings.anyAvailable")}</option>
+                        {activeResources.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name} · {kindLabel(r.kind, t)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  <label className="ch-field">
+                    <span className="ch-label">{t("common.notes")}</span>
+                    <textarea
+                      className="ch-input w-full resize-y px-2.5 py-2"
+                      rows={2}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                    />
+                  </label>
+                  {focusPeerId ? (
+                    <label className="ch-toggle">
+                      <input
+                        type="checkbox"
+                        className="ch-check"
+                        checked={linkPeer}
+                        onChange={(e) => setLinkPeer(e.target.checked)}
+                      />
+                      <span>
+                        {focusPeerName ? t("bookings.linkToChatNamed", { name: focusPeerName }) : t("bookings.linkToChat")}
+                      </span>
+                    </label>
+                  ) : null}
+                </div>
+
+                <div className="ch-sheet-foot">
+                  <button
+                    type="button"
+                    className="ch-btn ch-btn-text h-8 px-2.5"
+                    onClick={closeSheet}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving || !canConfirm}
+                    className="ch-btn ch-btn-primary h-8 px-3"
+                  >
+                    {saving ? t("common.saving") : editingId ? t("common.save") : t("bookings.book")}
+                  </button>
+                </div>
+              </form>
+            </>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

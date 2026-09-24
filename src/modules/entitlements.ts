@@ -17,6 +17,8 @@ const ALL_ON: Record<ModuleId, boolean> = {
   bookings: true,
   resources: true,
   media: true,
+  hours: true,
+  catalog: true,
 };
 
 /** Resolve what the account may use. For now always all modules. */

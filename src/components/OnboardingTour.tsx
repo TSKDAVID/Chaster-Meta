@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { driver } from "driver.js";
+import { useI18n } from "@/components/I18nProvider";
 import { isTourDone, markTourDone } from "@/lib/prefs";
 
 type Props = {
@@ -10,6 +11,8 @@ type Props = {
 };
 
 export default function OnboardingTour({ runToken, force = false }: Props) {
+  const { t } = useI18n();
+
   useEffect(() => {
     if (!force && isTourDone()) return;
 
@@ -21,9 +24,9 @@ export default function OnboardingTour({ runToken, force = false }: Props) {
       stagePadding: 8,
       stageRadius: 12,
       showButtons: ["next", "previous", "close"],
-      nextBtnText: "Next",
-      prevBtnText: "Back",
-      doneBtnText: "Finish",
+      nextBtnText: t("tour.next"),
+      prevBtnText: t("tour.back"),
+      doneBtnText: t("tour.finish"),
       onDestroyStarted: () => {
         if (!tour.isActive()) return;
         markTourDone();
@@ -33,15 +36,15 @@ export default function OnboardingTour({ runToken, force = false }: Props) {
         // Make the built-in close control read as Skip
         const closeBtn = popover.closeButton;
         if (closeBtn) {
-          closeBtn.setAttribute("aria-label", "Skip tour");
-          closeBtn.title = "Skip tour";
+          closeBtn.setAttribute("aria-label", t("tour.skipTour"));
+          closeBtn.title = t("tour.skipTour");
         }
 
         // Add an explicit Skip button in the footer (once)
         if (popover.footerButtons.querySelector("[data-tour-skip]")) return;
         const skip = document.createElement("button");
         skip.type = "button";
-        skip.textContent = "Skip";
+        skip.textContent = t("tour.skip");
         skip.dataset.tourSkip = "1";
         skip.className = "driver-popover-skip-btn";
         skip.addEventListener("click", () => {
@@ -53,71 +56,63 @@ export default function OnboardingTour({ runToken, force = false }: Props) {
       steps: [
         {
           popover: {
-            title: "Welcome to Chaster",
-            description:
-              "This desk connects your Facebook Page, receives Messenger (and Instagram) chats, and lets AI reply using your FAQ knowledge.",
+            title: t("tour.welcomeTitle"),
+            description: t("tour.welcomeBody"),
           },
         },
         {
           element: "[data-tour='profile']",
           popover: {
-            title: "Page, profile & settings",
-            description:
-              "Connect or switch Facebook Pages here, pick a theme, set AI defaults, or restart this tour.",
+            title: t("tour.pageMenuTitle"),
+            description: t("tour.pageMenuBody"),
             side: "bottom",
           },
         },
         {
           element: "[data-tour='inbox']",
           popover: {
-            title: "Your inbox",
-            description:
-              "New customer chats land here after the webhook receives them. Search by ID or message text.",
+            title: t("tour.inboxTitle"),
+            description: t("tour.inboxBody"),
             side: "right",
           },
         },
         {
           element: "[data-tour='channel-filter']",
           popover: {
-            title: "Messenger vs Instagram",
-            description:
-              "Filter by channel. Each chat shows a Messenger or Instagram icon so you always know the source.",
+            title: t("tour.channelsTitle"),
+            description: t("tour.channelsBody"),
             side: "bottom",
           },
         },
         {
           element: "[data-tour='thread']",
           popover: {
-            title: "Conversation thread",
-            description:
-              "Open a chat to read history and send replies with Meta’s Send API.",
+            title: t("tour.threadTitle"),
+            description: t("tour.threadBody"),
             side: "left",
           },
         },
         {
           element: "[data-tour='ai-controls']",
           popover: {
-            title: "AI controls",
-            description:
-              "Handover to human pauses AI. Continue with AI turns it back on. End chat summarizes and suggests FAQs.",
+            title: t("tour.aiTitle"),
+            description: t("tour.aiBody"),
             side: "bottom",
           },
         },
         {
           element: "[data-tour='knowledge-toggle']",
           popover: {
-            title: "FAQs",
-            description:
-              "Tap FAQs to add answers your Page should know. The AI uses these when customers message you. Approve end-chat suggestions here too.",
+            title: t("tour.faqsTitle"),
+            description: t("tour.faqsBody"),
             side: "bottom",
           },
         },
         {
           element: "[data-tour='profile']",
           popover: {
-            title: "Themes",
-            description:
-              "Open the menu again and pick a theme — Light, Dark, or a colored look. Your choice is saved in this browser.",
+            title: t("tour.themesTitle"),
+            description: t("tour.themesBody"),
             side: "bottom",
             onNextClick: (_el, _step, { driver: d }) => {
               const btn = document.querySelector(
@@ -139,9 +134,8 @@ export default function OnboardingTour({ runToken, force = false }: Props) {
         {
           element: "[data-tour='theme']",
           popover: {
-            title: "Choose your theme",
-            description:
-              "Tap Select theme for Light, Dark, or a colored look. Your choice is saved in this browser.",
+            title: t("theme.theme"),
+            description: t("tour.themesBody"),
             side: "left",
           },
         },
@@ -153,7 +147,7 @@ export default function OnboardingTour({ runToken, force = false }: Props) {
       window.clearTimeout(id);
       tour.destroy();
     };
-  }, [runToken, force]);
+  }, [runToken, force, t]);
 
   return null;
 }

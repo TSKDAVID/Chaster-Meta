@@ -1,4 +1,4 @@
-import type { BookingSettings, ResourceSummary } from "@/lib/types";
+import type { BookingSettings, CatalogItem, MessagePlatform, PageProfile, ResourceSummary } from "@/lib/types";
 import type { AccountEntitlements } from "./entitlements";
 
 /** Stable ids — used in entitlements, registry, tools.moduleId, billing SKUs. */
@@ -7,7 +7,9 @@ export type ModuleId =
   | "knowledge"
   | "bookings"
   | "resources"
-  | "media";
+  | "media"
+  | "hours"
+  | "catalog";
 
 /** Context passed into module prompts + tool runners during an AI turn. */
 export type ModuleContext = {
@@ -15,6 +17,9 @@ export type ModuleContext = {
   peerId: string;
   customerName?: string | null;
   entitlements: AccountEntitlements;
+  /** Page token for outbound Graph calls (e.g. send_photo). */
+  pageAccessToken?: string | null;
+  platform?: MessagePlatform;
   /** Present when bookings settings were loaded for this Page. */
   bookingSettings?: BookingSettings | null;
   /** Active resources when the resources module is used. */
@@ -24,6 +29,10 @@ export type ModuleContext = {
     question: string | null;
     content: string;
   }>;
+  /** Hours & place profile. */
+  pageProfile?: PageProfile | null;
+  /** Active catalog items for priced answers. */
+  catalogItems?: CatalogItem[];
 };
 
 /**

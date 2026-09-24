@@ -39,6 +39,12 @@ export function parseDeskPath(pathname: string): DeskLocation {
   if (path === "/faqs" || path.startsWith("/faqs/")) {
     return { view: "knowledge", bookingTab: "schedule", knowledgeTab: "faq" };
   }
+  if (path === "/hours" || path.startsWith("/hours/")) {
+    return { view: "hours", bookingTab: "schedule", knowledgeTab: "faq" };
+  }
+  if (path === "/catalog" || path.startsWith("/catalog/")) {
+    return { view: "catalog", bookingTab: "schedule", knowledgeTab: "faq" };
+  }
   return { view: "inbox", bookingTab: "schedule", knowledgeTab: "faq" };
 }
 
@@ -55,5 +61,7 @@ export function deskHref(
   if (view === "knowledge") {
     return opts?.knowledgeTab === "suggestions" ? "/faqs/suggestions" : "/faqs";
   }
+  if (view === "hours") return "/hours";
+  if (view === "catalog") return "/catalog";
   return "/inbox";
 }

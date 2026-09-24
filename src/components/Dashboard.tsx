@@ -3,18 +3,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import BookingDrawer from "@/components/BookingDrawer";
+import CatalogDrawer from "@/components/CatalogDrawer";
 import ChatThread from "@/components/ChatThread";
+import HoursPlaceDrawer from "@/components/HoursPlaceDrawer";
 import InboxSidebar from "@/components/InboxSidebar";
 import KnowledgeDrawer from "@/components/KnowledgeDrawer";
 import Navbar, { type DeskView } from "@/components/Navbar";
 import OnboardingTour from "@/components/OnboardingTour";
+import { I18nProvider } from "@/components/I18nProvider";
+import { HintsProvider } from "@/components/HintsProvider";
 import {
   deskHref,
   parseDeskPath,
   type BookingDeskTab,
   type KnowledgeDeskTab,
 } from "@/lib/desk-routes";
+import { normalizeLocale } from "@/lib/i18n/locales";
+import { translate } from "@/lib/i18n";
 import {
+  defaultPrefs,
   fetchAccountPrefs,
   isTourDone,
   loadPrefs,
@@ -69,10 +76,7 @@ export default function Dashboard() {
   const [platformFilter, setPlatformFilter] = useState<"all" | MessagePlatform>("all");
   const [bookingsFocusPeer, setBookingsFocusPeer] = useState(false);
   const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
-  const [prefs, setPrefs] = useState<OperatorPrefs>({
-    defaultAiReplies: true,
-    theme: "slate",
-  });
+  const [prefs, setPrefs] = useState<OperatorPrefs>(defaultPrefs);
   const [tourToken, setTourToken] = useState(0);
   const [forceTour, setForceTour] = useState(false);
   const [urlReady, setUrlReady] = useState(false);
@@ -127,7 +131,7 @@ export default function Dashboard() {
   useEffect(() => {
     const loaded = loadPrefs();
     setPrefs(loaded);
-    applyTheme(loaded.theme);
+    applyTheme(loaded.theme, loaded.customColors);
     if (!isTourDone()) {
       setForceTour(false);
       setTourToken(1);
@@ -217,7 +221,7 @@ export default function Dashboard() {
     // Instant cache while DB loads
     const cached = loadPrefs(accountId);
     setPrefs(cached);
-    applyTheme(cached.theme);
+    applyTheme(cached.theme, cached.customColors);
 
     void fetchAccountPrefs(accountId)
       .then(async ({ prefs: loaded, source }) => {
@@ -227,11 +231,28 @@ export default function Dashboard() {
           const seeded = await persistAccountPrefs(cached, accountId);
           if (cancelled) return;
           setPrefs(seeded);
-          applyTheme(seeded.theme);
+          applyTheme(seeded.theme, seeded.customColors);
+          return;
+        }
+        // One-time: new locale/hints columns defaulted in DB while cache already differs
+        const localeNeedsSeed =
+          loaded.locale === "en" && cached.locale !== "en";
+        const hintsNeedsSeed =
+          loaded.showHints === true && cached.showHints === false;
+        if (localeNeedsSeed || hintsNeedsSeed) {
+          const merged = {
+            ...loaded,
+            locale: localeNeedsSeed ? cached.locale : loaded.locale,
+            showHints: hintsNeedsSeed ? cached.showHints : loaded.showHints,
+          };
+          const seeded = await persistAccountPrefs(merged, accountId);
+          if (cancelled) return;
+          setPrefs(seeded);
+          applyTheme(seeded.theme, seeded.customColors);
           return;
         }
         setPrefs(loaded);
-        applyTheme(loaded.theme);
+        applyTheme(loaded.theme, loaded.customColors);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -315,7 +336,7 @@ export default function Dashboard() {
     "messenger";
 
   async function disconnectPage(pageId: string) {
-    if (!confirm("Disconnect this Page and delete its stored token?")) return;
+    if (!confirm(translate(prefs.locale, "dashboard.disconnectConfirm"))) return;
     const res = await fetch(`/api/pages?page_id=${encodeURIComponent(pageId)}`, {
       method: "DELETE",
     });
@@ -479,10 +500,14 @@ export default function Dashboard() {
 
   function handlePrefsChange(next: OperatorPrefs) {
     setPrefs(next);
-    applyTheme(next.theme);
+    applyTheme(next.theme, next.customColors);
     void persistAccountPrefs(next, accountId).catch((err) =>
       setError(err instanceof Error ? err.message : "Failed to save theme"),
     );
+  }
+
+  function handleLocaleChange(locale: OperatorPrefs["locale"]) {
+    handlePrefsChange({ ...prefs, locale: normalizeLocale(locale) });
   }
 
   function restartTour() {
@@ -501,6 +526,14 @@ export default function Dashboard() {
       navigateDesk("knowledge", { knowledgeTab: "faq" });
       return;
     }
+    if (next === "hours") {
+      navigateDesk("hours");
+      return;
+    }
+    if (next === "catalog") {
+      navigateDesk("catalog");
+      return;
+    }
     navigateDesk("inbox");
   }
 
@@ -509,208 +542,185 @@ export default function Dashboard() {
     navigateDesk("bookings", { bookingTab: "schedule" });
   }
 
+  const notices = (
+    <>
+      {loading ? (
+        <div className="ch-notice">{translate(prefs.locale, "common.loading")}</div>
+      ) : null}
+      {!prefs.defaultAiReplies ? (
+        <div className="ch-notice">
+          {translate(prefs.locale, "dashboard.aiOff")}
+        </div>
+      ) : null}
+      {banner ? (
+        <div className="ch-notice is-success">
+          <span>{banner}</span>
+          <button type="button" className="ch-notice-dismiss" onClick={() => setBanner(null)}>
+            {translate(prefs.locale, "common.dismiss")}
+          </button>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="ch-notice is-danger" role="alert">
+          <span>{error}</span>
+          <button type="button" className="ch-notice-dismiss" onClick={() => setError(null)}>
+            {translate(prefs.locale, "common.dismiss")}
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
-    <div className="ch-shell">
-      <OnboardingTour runToken={tourToken} force={forceTour} />
+    <I18nProvider locale={prefs.locale} onLocaleChange={handleLocaleChange}>
+      <HintsProvider enabled={prefs.showHints !== false}>
+      <div className="ch-shell">
+        <OnboardingTour runToken={tourToken} force={forceTour} />
 
-      <Navbar
-        pages={pages}
-        selectedPageId={selectedPageId}
-        onSelectPage={(id) => {
-          setSelectedPageId(id);
-          setSelectedPeerId("");
-          setMessages([]);
-          navigateDesk("inbox");
-        }}
-        onDisconnect={disconnectPage}
-        prefs={prefs}
-        onPrefsChange={handlePrefsChange}
-        onRestartTour={restartTour}
-        deskView={deskView}
-        onDeskViewChange={changeDeskView}
-      />
+        <div className="ch-stage">
+          <Navbar
+            pages={pages}
+            selectedPageId={selectedPageId}
+            onSelectPage={(id) => {
+              setSelectedPageId(id);
+              setSelectedPeerId("");
+              setMessages([]);
+              navigateDesk("inbox");
+            }}
+            onDisconnect={disconnectPage}
+            prefs={prefs}
+            onPrefsChange={handlePrefsChange}
+            onRestartTour={restartTour}
+            deskView={deskView}
+            onDeskViewChange={changeDeskView}
+          />
 
-      {(banner || error || loading || !prefs.defaultAiReplies) && (
-        <div className="flex w-full shrink-0 flex-col gap-1 px-0.5">
-          {loading && (
-            <div
-              className="border px-3 py-1 text-[12px]"
-              style={{
-                borderColor: "var(--chaster-border)",
-                background: "var(--chaster-panel)",
-                color: "var(--chaster-muted)",
-                borderRadius: "var(--chaster-radius)",
-              }}
-            >
-              Loading workspace…
-            </div>
-          )}
-          {!prefs.defaultAiReplies && (
-            <div
-              className="border px-3 py-1 text-[12px]"
-              style={{
-                borderColor: "var(--chaster-border)",
-                background: "var(--chaster-panel)",
-                color: "var(--chaster-muted)",
-                borderRadius: "var(--chaster-radius)",
-              }}
-            >
-              Default AI preference is off. Per-chat AI status still controls webhook replies.
-            </div>
-          )}
-          {banner && (
-            <div
-              className="border px-3 py-1 text-[13px]"
-              style={{
-                borderColor: "var(--chaster-success-border)",
-                background: "var(--chaster-success-bg)",
-                color: "var(--chaster-success-text)",
-                borderRadius: "var(--chaster-radius)",
-              }}
-            >
-              {banner}
-              <button
-                type="button"
-                className="ml-2 text-[11px] underline"
-                onClick={() => setBanner(null)}
+          {banner || error || loading || !prefs.defaultAiReplies ? (
+            <div className="ch-notices">{notices}</div>
+          ) : null}
+
+          {deskView === "inbox" ? (
+            <div className="ch-desk-page ch-inbox-split" key="desk-inbox">
+              <div
+                className={`ch-inbox-pane ${
+                  selectedPeerId ? "hidden md:flex" : "flex"
+                }`}
               >
-                Dismiss
-              </button>
-            </div>
-          )}
-          {error && (
-            <div
-              className="border px-3 py-1 text-[13px]"
-              style={{
-                borderColor: "var(--chaster-danger-border)",
-                background: "var(--chaster-danger-bg)",
-                color: "var(--chaster-danger-text)",
-                borderRadius: "var(--chaster-radius)",
-              }}
-            >
-              {error}
-              <button
-                type="button"
-                className="ml-2 text-[11px] underline"
-                onClick={() => setError(null)}
+                <InboxSidebar
+                  conversations={conversations}
+                  selectedPeerId={selectedPeerId}
+                  onSelect={setSelectedPeerId}
+                  search={search}
+                  onSearchChange={setSearch}
+                  platformFilter={platformFilter}
+                  onPlatformFilterChange={setPlatformFilter}
+                />
+              </div>
+              <div
+                className={`ch-thread-pane ${
+                  selectedPeerId ? "flex" : "hidden md:flex"
+                }`}
               >
-                Dismiss
-              </button>
+                <ChatThread
+                  peerId={selectedPeerId}
+                  displayName={selectedConversation?.display_name}
+                  platform={threadPlatform}
+                  status={chatStatus}
+                  summary={chatSummary}
+                  messages={messages}
+                  draft={draft}
+                  onDraftChange={setDraft}
+                  replyTo={replyTo}
+                  onReplyTo={setReplyTo}
+                  sending={sending}
+                  reactingMid={reactingMid}
+                  ending={endingChat}
+                  statusBusy={statusBusy}
+                  onSend={sendReply}
+                  onReact={(mid, reaction) => void reactToMessage(mid, reaction)}
+                  onHandover={() => void setConversationStatus("human")}
+                  onContinueAi={() => void setConversationStatus("open")}
+                  onEndChat={() => void endChat()}
+                  onBack={() => setSelectedPeerId("")}
+                  pageId={selectedPageId}
+                  bookingRefreshKey={bookingRefreshKey}
+                  onOpenBookings={openBookingsForPeer}
+                  onBookingError={setError}
+                />
+              </div>
+            </div>
+          ) : deskView === "bookings" ? (
+            <div className="ch-desk-page" key="desk-bookings">
+              {selectedPageId ? (
+                <BookingDrawer
+                  open
+                  onClose={() => changeDeskView("inbox")}
+                  pageId={selectedPageId}
+                  pageName={selectedPage?.page_name}
+                  focusPeerId={
+                    bookingsFocusPeer && selectedPeerId ? selectedPeerId : null
+                  }
+                  focusPeerName={
+                    bookingsFocusPeer
+                      ? selectedConversation?.display_name ?? null
+                      : null
+                  }
+                  onError={setError}
+                  refreshKey={bookingRefreshKey}
+                  tab={bookingTab}
+                  onTabChange={(next) =>
+                    navigateDesk("bookings", { bookingTab: next })
+                  }
+                />
+              ) : (
+                <div className="ch-empty-line">{translate(prefs.locale, "dashboard.connectBookings")}</div>
+              )}
+            </div>
+          ) : deskView === "hours" ? (
+            <div className="ch-desk-page" key="desk-hours">
+              {selectedPageId ? (
+                <HoursPlaceDrawer
+                  open
+                  onClose={() => changeDeskView("inbox")}
+                  pageId={selectedPageId}
+                  onError={setError}
+                />
+              ) : (
+                <div className="ch-empty-line">{translate(prefs.locale, "dashboard.connectHours")}</div>
+              )}
+            </div>
+          ) : deskView === "catalog" ? (
+            <div className="ch-desk-page" key="desk-catalog">
+              {selectedPageId ? (
+                <CatalogDrawer
+                  open
+                  onClose={() => changeDeskView("inbox")}
+                  pageId={selectedPageId}
+                  onError={setError}
+                />
+              ) : (
+                <div className="ch-empty-line">{translate(prefs.locale, "dashboard.connectCatalog")}</div>
+              )}
+            </div>
+          ) : (
+            <div className="ch-desk-page" key="desk-knowledge">
+              <KnowledgeDrawer
+                open
+                onClose={() => changeDeskView("inbox")}
+                onError={setError}
+                suggestionsKey={suggestionsKey}
+                faqKey={faqKey}
+                tab={knowledgeTab}
+                onTabChange={(next) =>
+                  navigateDesk("knowledge", { knowledgeTab: next })
+                }
+                onApproved={() => setFaqKey((k) => k + 1)}
+              />
             </div>
           )}
         </div>
-      )}
-
-      <div className="ch-stage-bubble">
-        {deskView === "inbox" ? (
-          <div
-            className="ch-desk-page flex h-full min-h-0 w-full flex-row overflow-hidden"
-            key="desk-inbox"
-          >
-            <div
-              className={`min-h-0 w-full shrink-0 md:flex md:w-[280px] ${
-                selectedPeerId ? "hidden md:flex" : "flex"
-              }`}
-            >
-              <InboxSidebar
-                conversations={conversations}
-                selectedPeerId={selectedPeerId}
-                onSelect={setSelectedPeerId}
-                search={search}
-                onSearchChange={setSearch}
-                platformFilter={platformFilter}
-                onPlatformFilterChange={setPlatformFilter}
-                pageName={selectedPage?.page_name}
-              />
-            </div>
-            <div
-              className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
-                selectedPeerId ? "flex" : "hidden md:flex"
-              }`}
-            >
-              <ChatThread
-                peerId={selectedPeerId}
-                displayName={selectedConversation?.display_name}
-                platform={threadPlatform}
-                status={chatStatus}
-                summary={chatSummary}
-                messages={messages}
-                draft={draft}
-                onDraftChange={setDraft}
-                replyTo={replyTo}
-                onReplyTo={setReplyTo}
-                sending={sending}
-                reactingMid={reactingMid}
-                ending={endingChat}
-                statusBusy={statusBusy}
-                onSend={sendReply}
-                onReact={(mid, reaction) => void reactToMessage(mid, reaction)}
-                onHandover={() => void setConversationStatus("human")}
-                onContinueAi={() => void setConversationStatus("open")}
-                onEndChat={() => void endChat()}
-                onBack={() => setSelectedPeerId("")}
-                pageId={selectedPageId}
-                bookingRefreshKey={bookingRefreshKey}
-                onOpenBookings={openBookingsForPeer}
-                onBookingError={setError}
-              />
-            </div>
-          </div>
-        ) : deskView === "bookings" ? (
-          <div
-            className="ch-desk-page flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-            key="desk-bookings"
-          >
-            {selectedPageId ? (
-              <BookingDrawer
-                open
-                onClose={() => changeDeskView("inbox")}
-                pageId={selectedPageId}
-                pageName={selectedPage?.page_name}
-                focusPeerId={
-                  bookingsFocusPeer && selectedPeerId ? selectedPeerId : null
-                }
-                focusPeerName={
-                  bookingsFocusPeer
-                    ? selectedConversation?.display_name ?? null
-                    : null
-                }
-                onError={setError}
-                refreshKey={bookingRefreshKey}
-                tab={bookingTab}
-                onTabChange={(next) =>
-                  navigateDesk("bookings", { bookingTab: next })
-                }
-              />
-            ) : (
-              <div
-                className="flex flex-1 items-center justify-center px-6 text-center text-[13px]"
-                style={{ color: "var(--chaster-muted)" }}
-              >
-                Connect a Facebook Page to manage bookings.
-              </div>
-            )}
-          </div>
-        ) : (
-          <div
-            className="ch-desk-page flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-            key="desk-knowledge"
-          >
-            <KnowledgeDrawer
-              open
-              onClose={() => changeDeskView("inbox")}
-              onError={setError}
-              suggestionsKey={suggestionsKey}
-              faqKey={faqKey}
-              tab={knowledgeTab}
-              onTabChange={(next) =>
-                navigateDesk("knowledge", { knowledgeTab: next })
-              }
-              onApproved={() => setFaqKey((k) => k + 1)}
-            />
-          </div>
-        )}
       </div>
-    </div>
+      </HintsProvider>
+    </I18nProvider>
   );
 }

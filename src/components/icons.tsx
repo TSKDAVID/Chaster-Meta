@@ -218,6 +218,105 @@ export function IconGlobe({ size = 15, className }: IconProps) {
   );
 }
 
+export function IconPin({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="M12 21s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10Z" />
+      <circle {...stroke} cx="12" cy="11" r="2.2" />
+    </svg>
+  );
+}
+
+export function IconTag({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="M3.5 12.5 11.2 4.8A2 2 0 0 1 12.6 4.2H19a1.5 1.5 0 0 1 1.5 1.5v6.4a2 2 0 0 1-.6 1.4L12.2 21.2a1.2 1.2 0 0 1-1.7 0L3.5 14.2a1.2 1.2 0 0 1 0-1.7Z" />
+      <circle {...stroke} cx="16.2" cy="8.2" r="1.1" />
+    </svg>
+  );
+}
+
+export function IconScissors({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <circle {...stroke} cx="6" cy="6" r="2.5" />
+      <circle {...stroke} cx="6" cy="18" r="2.5" />
+      <path {...stroke} d="M8.2 7.5 20 18M8.2 16.5 20 6" />
+    </svg>
+  );
+}
+
+export function IconDoor({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <rect {...stroke} x="5" y="3.5" width="14" height="17" rx="1.5" />
+      <path {...stroke} d="M14.5 12h.01" />
+    </svg>
+  );
+}
+
+export function IconJump({ size = 12, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="M9 5.5h9.5V15M18.5 5.5 5.5 18.5" />
+    </svg>
+  );
+}
+
+export function IconImage({ size = 15, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <rect {...stroke} x="3.5" y="5" width="17" height="14" rx="1.5" />
+      <circle {...stroke} cx="9" cy="10" r="1.4" />
+      <path {...stroke} d="m7.5 16.5 3.2-3.4 2.3 2.1 2.8-3.2 3.2 4.5" />
+    </svg>
+  );
+}
+
+export function IconMore({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <circle cx="6" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="18" cy="12" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function IconCopy({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <rect {...stroke} x="9" y="9" width="10.5" height="10.5" rx="1.5" />
+      <path {...stroke} d="M5.5 15V6A1.5 1.5 0 0 1 7 4.5h8" />
+    </svg>
+  );
+}
+
+export function IconPlus({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="M12 5.5v13M5.5 12h13" />
+    </svg>
+  );
+}
+
+export function IconTrash({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="M5 7h14M9.5 7V5.5h5V7M7 7l.8 12h8.4L17 7" />
+    </svg>
+  );
+}
+
+export function IconPencil({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden>
+      <path {...stroke} d="m14.5 5.5 4 4L8 20H4v-4L14.5 5.5Z" />
+      <path {...stroke} d="m12.5 7.5 4 4" />
+    </svg>
+  );
+}
+
 export function IconChevron({
   size = 14,
   className,

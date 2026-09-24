@@ -3,14 +3,28 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ChannelIcon from "@/components/ChannelIcon";
 import ChatBookingStrip from "@/components/ChatBookingStrip";
-import { IconBack, IconClose, IconDown, IconReply, IconSend } from "@/components/icons";
+import { useI18n } from "@/components/I18nProvider";
+import MessageText from "@/components/MessageText";
+import {
+  IconBack,
+  IconClose,
+  IconCopy,
+  IconDown,
+  IconMore,
+  IconReply,
+  IconSend,
+} from "@/components/icons";
 import ReactionPicker from "@/components/ReactionPicker";
+import { formatMessageTime } from "@/lib/format-time";
+import type { TranslateFn } from "@/lib/i18n";
 import {
   getCustomerReaction,
+  getMessageImageUrl,
   getOutgoingAuthor,
   getPageReaction,
   getReplyToMid,
 } from "@/lib/message-actions";
+import { stripAttachmentUrls, toPlainText } from "@/lib/message-text";
 import type { ConversationStatus, MessagePlatform, MessengerMessage } from "@/lib/types";
 
 type Props = {
@@ -40,34 +54,26 @@ type Props = {
   onBookingError?: (message: string | null) => void;
 };
 
-function formatTime(iso: string) {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function statusCopy(status: ConversationStatus) {
+function statusCopy(status: ConversationStatus, t: TranslateFn) {
   if (status === "human") {
-    return { label: "You’re on it", color: "var(--chaster-warn-text)" };
+    return { label: t("chat.youAnswering"), kind: "human" as const };
   }
   if (status === "ended") {
-    return { label: "Closed", color: "var(--chaster-muted)" };
+    return { label: t("chat.closed"), kind: "ended" as const };
   }
-  return { label: "AI answering", color: "var(--chaster-muted)" };
+  return { label: t("chat.aiAnswering"), kind: "ai" as const };
 }
 
-function previewText(message: MessengerMessage | undefined) {
-  if (!message) return "Original message";
-  const text = message.message_text?.trim();
+function channelLabel(platform: MessagePlatform, t: TranslateFn) {
+  return platform === "instagram" ? t("inbox.instagram") : t("inbox.messenger");
+}
+
+function previewText(message: MessengerMessage | undefined, t: TranslateFn) {
+  if (!message) return t("chat.originalMessage");
+  const imageUrl = getMessageImageUrl(message);
+  const text = toPlainText(message.message_text?.trim() ?? "", imageUrl);
   if (text) return text.length > 96 ? `${text.slice(0, 96)}…` : text;
-  return "(non-text)";
+  return imageUrl ? t("chat.photo") : t("chat.attachment");
 }
 
 export default function ChatThread({
@@ -96,7 +102,8 @@ export default function ChatThread({
   onOpenBookings,
   onBookingError,
 }: Props) {
-  const meta = statusCopy(status);
+  const { t } = useI18n();
+  const meta = statusCopy(status, t);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -104,6 +111,30 @@ export default function ChatThread({
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const [showJumpBottom, setShowJumpBottom] = useState(false);
   const [reactMenuMid, setReactMenuMid] = useState<string | null>(null);
+  const [headMenuOpen, setHeadMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const headMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!headMenuOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (headMenuRef.current && !headMenuRef.current.contains(e.target as Node)) {
+        setHeadMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", onDocClick);
+    return () => document.removeEventListener("pointerdown", onDocClick);
+  }, [headMenuOpen]);
+
+  async function copyPeerId() {
+    try {
+      await navigator.clipboard.writeText(peerId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable
+    }
+  }
 
   const byMid = useMemo(() => {
     const map = new Map<string, MessengerMessage>();
@@ -178,109 +209,101 @@ export default function ChatThread({
 
   if (!peerId) {
     return (
-      <div
-        className="ch-ruled flex flex-1 flex-col items-center justify-center px-10 py-12 text-center"
-        data-tour="thread"
-      >
-        <p
-          className="text-[22px] font-semibold tracking-[-0.05em]"
-          style={{ color: "var(--chaster-ink)" }}
-        >
-          Pick a conversation
-        </p>
-        <p
-          className="mt-2 max-w-sm text-[14px] leading-relaxed"
-          style={{
-            color: "var(--chaster-muted)",
-            fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-          }}
-        >
-          Choose a chat from the inbox to read messages and reply as your Page.
-        </p>
+      <div className="ch-ruled ch-thread-empty" data-tour="thread">
+        <p className="ch-thread-empty-title">{t("chat.pickConversation")}</p>
       </div>
     );
   }
 
   return (
-    <section
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
-      style={{ background: "transparent" }}
-      data-tour="thread"
-    >
-      <div
-        className="flex flex-wrap items-end justify-between gap-3 px-3 py-3 sm:px-5 sm:py-3.5"
-        style={{ borderBottom: "1px solid var(--chaster-border)" }}
-      >
-        <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+    <section className="ch-thread" data-tour="thread">
+      <div className="ch-thread-head">
+        <div className="ch-thread-head-main">
           {onBack ? (
             <button
               type="button"
               onClick={onBack}
-              className="ch-btn ch-btn-ghost mt-0.5 h-9 w-9 shrink-0 px-0 md:hidden"
-              aria-label="Back to inbox"
+              className="ch-btn ch-btn-ghost ch-desk-back h-8 w-8 shrink-0 px-0"
+              aria-label={t("common.backToInbox")}
             >
-              <IconBack size={16} />
+              <IconBack size={15} />
             </button>
           ) : null}
-          <ChannelIcon platform={platform} size={20} />
           <div className="min-w-0">
-            <div
-              className="truncate text-[16px] font-semibold tracking-[-0.045em] sm:text-[17px]"
-              style={{ color: "var(--chaster-ink)" }}
-            >
-              {displayName || "Unknown customer"}
+            <div className="ch-thread-name">
+              {displayName || t("inbox.unknownCustomer")}
             </div>
-            <div
-              className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]"
-              style={{
-                color: "var(--chaster-muted)",
-                fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-              }}
-            >
-              <span data-tour="ai-status" style={{ color: meta.color }}>
+            <div className="ch-thread-sub">
+              <ChannelIcon platform={platform} size={12} />
+              <span>{channelLabel(platform, t)}</span>
+              <span aria-hidden>·</span>
+              <span data-tour="ai-status" className={`ch-thread-status is-${meta.kind}`}>
                 {meta.label}
-              </span>
-              <span aria-hidden className="hidden sm:inline">
-                ·
-              </span>
-              <span className="hidden font-mono text-[10px] tracking-normal sm:inline">
-                {peerId}
               </span>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1" data-tour="ai-controls">
+        <div className="ch-thread-actions" data-tour="ai-controls">
           {status === "open" ? (
             <button
               type="button"
               disabled={statusBusy}
               onClick={onHandover}
-              className="ch-btn ch-btn-text h-9 px-2.5 sm:h-8"
+              className="ch-btn ch-btn-ghost h-8 px-2.5"
             >
-              Take over
+              {t("chat.takeOver")}
             </button>
           ) : (
             <button
               type="button"
               disabled={statusBusy}
               onClick={onContinueAi}
-              className="ch-btn ch-btn-text h-9 px-2.5 sm:h-8"
+              className="ch-btn ch-btn-ghost h-8 px-2.5"
             >
-              Resume AI
+              {t("chat.resumeAi")}
             </button>
           )}
-          {status !== "ended" && (
+          {status !== "ended" ? (
             <button
               type="button"
               disabled={ending || messages.length === 0}
               onClick={onEndChat}
-              className="ch-btn ch-btn-text h-9 px-2.5 sm:h-8"
-              style={{ color: "var(--chaster-danger-text)" }}
+              className="ch-btn ch-btn-text h-8 px-2.5"
             >
-              {ending ? "Closing…" : "Close"}
+              {ending ? t("chat.closing") : t("chat.closeChat")}
             </button>
-          )}
+          ) : null}
+          <div className="relative" ref={headMenuRef}>
+            <button
+              type="button"
+              className="ch-btn ch-btn-text h-8 w-8 px-0"
+              aria-label={t("common.more")}
+              aria-haspopup="menu"
+              aria-expanded={headMenuOpen}
+              onClick={() => setHeadMenuOpen((v) => !v)}
+            >
+              <IconMore size={15} />
+            </button>
+            {headMenuOpen ? (
+              <div className="ch-menu ch-menu-sm" role="menu">
+                <div className="ch-menu-section">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="ch-menu-item"
+                    onClick={() => void copyPeerId()}
+                  >
+                    <IconCopy size={13} />
+                    <span className="ch-menu-item-text">
+                      {copied ? t("chat.copied") : t("chat.copyCustomerId")}
+                    </span>
+                  </button>
+                  <div className="ch-menu-meta tabular-nums">{peerId}</div>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -295,33 +318,12 @@ export default function ChatThread({
         />
       ) : null}
 
-      {status === "human" && (
-        <div
-          className="px-5 py-2 text-[12.5px] leading-snug"
-          style={{
-            borderBottom: "1px solid var(--chaster-border)",
-            color: "var(--chaster-warn-text)",
-            fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-          }}
-        >
-          You’re on desk — AI won’t auto-reply in this thread.
-        </div>
-      )}
-      {status === "ended" && summary && (
-        <div
-          className="px-5 py-2 text-[12.5px]"
-          style={{
-            borderBottom: "1px solid var(--chaster-border)",
-            color: "var(--chaster-muted)",
-            fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-          }}
-        >
-          <span className="font-semibold" style={{ color: "var(--chaster-ink)" }}>
-            Summary ·{" "}
-          </span>
+      {status === "ended" && summary ? (
+        <div className="ch-thread-note">
+          <span className="ch-thread-note-label">{t("chat.summary")}</span>
           {summary}
         </div>
-      )}
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
         <div
@@ -330,14 +332,8 @@ export default function ChatThread({
           className="ch-ruled absolute inset-0 space-y-5 overflow-y-auto px-5 py-5"
         >
           {messages.length === 0 ? (
-            <p
-              className="text-[13px]"
-              style={{
-                color: "var(--chaster-muted)",
-                fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-              }}
-            >
-              No messages yet.
+            <p className="ch-empty-line" style={{ padding: 0, textAlign: "left" }}>
+              {t("chat.noMessages")}
             </p>
           ) : (
             messages.map((m) => {
@@ -346,9 +342,15 @@ export default function ChatThread({
               const parent = replyMid ? byMid.get(replyMid) : undefined;
               const pageReaction = getPageReaction(m);
               const customerReaction = getCustomerReaction(m);
+              const imageUrl = getMessageImageUrl(m);
               const canAct = Boolean(m.mid);
               const menuOpen = reactMenuMid === m.mid;
               const author = outgoing ? getOutgoingAuthor(m) : null;
+              const rawText = m.message_text?.trim() ?? "";
+              const text = stripAttachmentUrls(rawText, imageUrl);
+              const showText =
+                Boolean(text) &&
+                !(imageUrl && /^📷/.test(text) && text.length < 80);
 
               return (
                 <div
@@ -359,7 +361,7 @@ export default function ChatThread({
                 >
                   <div
                     className="flex flex-wrap items-baseline gap-x-1.5 font-mono text-[10px] tabular-nums"
-                    style={{ color: "var(--chaster-muted)" }}
+                    style={{ color: "var(--chaster-muted-soft)" }}
                   >
                     {outgoing ? (
                       <>
@@ -367,21 +369,21 @@ export default function ChatThread({
                           className={`ch-msg-who is-${author}`}
                           title={
                             author === "ai"
-                              ? "Sent by AI auto-reply"
-                              : "Sent by you from this desk"
+                              ? t("chat.sentByAi")
+                              : t("chat.sentByYou")
                           }
                         >
-                          {author === "ai" ? "AI" : "You"}
+                          {author === "ai" ? t("chat.roleAi") : t("chat.roleYou")}
                         </span>
                         <span aria-hidden>·</span>
                       </>
                     ) : (
                       <>
-                        <span>Client</span>
+                        <span>{t("chat.roleClient")}</span>
                         <span aria-hidden>·</span>
                       </>
                     )}
-                    <span>{formatTime(m.created_at)}</span>
+                    <span>{formatMessageTime(m.created_at)}</span>
                   </div>
 
                   {replyMid && (
@@ -393,33 +395,37 @@ export default function ChatThread({
                         borderLeft: "2px solid var(--chaster-border-strong, var(--chaster-border))",
                         paddingLeft: 8,
                       }}
-                      title={previewText(parent)}
+                      title={previewText(parent, t)}
                     >
-                      Replying to {previewText(parent)}
+                      {t("chat.replyingTo").replace("…", previewText(parent, t))}
                     </div>
                   )}
 
                   <div className="relative flex flex-col gap-1.5">
                     <div
-                      className="ch-msg-body px-3.5 py-2.5 text-[14px] leading-[1.55]"
-                      style={
+                      className={`ch-msg-body overflow-hidden text-[14px] leading-[1.55] ${
                         outgoing
-                          ? {
-                              background: "var(--chaster-bubble-out)",
-                              color: "var(--chaster-bubble-out-text)",
-                              borderRadius: "var(--chaster-radius-msg-out)",
-                            }
-                          : {
-                              background: "var(--chaster-bubble-in)",
-                              color: "var(--chaster-ink)",
-                              borderRadius: "var(--chaster-radius-msg)",
-                              boxShadow: "inset 0 0 0 1px var(--chaster-bubble-in-ring)",
-                            }
-                      }
+                          ? "ch-msg-out rounded-2xl rounded-tr-sm"
+                          : "ch-msg-in rounded-2xl rounded-tl-sm"
+                      }`}
                     >
-                      <div className="whitespace-pre-wrap">
-                        {m.message_text || "(non-text)"}
-                      </div>
+                      {imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={imageUrl}
+                          alt=""
+                          className="ch-msg-photo rounded-lg"
+                        />
+                      ) : null}
+                      {showText ? (
+                        <div className="px-3.5 py-2.5">
+                          <MessageText text={text} attachedUrl={imageUrl} />
+                        </div>
+                      ) : !imageUrl ? (
+                        <div className="px-3.5 py-2.5" style={{ color: "var(--chaster-muted)" }}>
+                          {t("chat.attachment")}
+                        </div>
+                      ) : null}
                     </div>
 
                     {(pageReaction || customerReaction) && (
@@ -433,7 +439,7 @@ export default function ChatThread({
                               background: "var(--chaster-panel)",
                               boxShadow: "inset 0 0 0 1px var(--chaster-border)",
                             }}
-                            title="Customer reaction"
+                            title={t("chat.customerReaction")}
                           >
                             {customerReaction}
                           </span>
@@ -445,7 +451,7 @@ export default function ChatThread({
                               background: "var(--chaster-panel)",
                               boxShadow: "inset 0 0 0 1px var(--chaster-border)",
                             }}
-                            title="Page reaction"
+                            title={t("chat.pageReaction")}
                           >
                             {pageReaction}
                           </span>
@@ -463,8 +469,8 @@ export default function ChatThread({
                           type="button"
                           className="ch-btn ch-btn-ghost h-7 w-7 px-0"
                           style={{ background: "var(--chaster-panel)" }}
-                          title="Reply"
-                          aria-label="Reply to message"
+                          title={t("chat.reply")}
+                          aria-label={t("chat.reply")}
                           onClick={() => {
                             onReplyTo(m);
                             setReactMenuMid(null);
@@ -478,8 +484,8 @@ export default function ChatThread({
                             type="button"
                             className="ch-btn ch-btn-ghost h-7 w-7 px-0"
                             style={{ background: "var(--chaster-panel)" }}
-                            title="React"
-                            aria-label="React to message"
+                            title={t("chat.react")}
+                            aria-label={t("chat.react")}
                             disabled={reactingMid === m.mid}
                             onClick={() =>
                               setReactMenuMid((cur) => (cur === m.mid ? null : m.mid ?? null))
@@ -521,10 +527,10 @@ export default function ChatThread({
             onClick={() => scrollToBottom("smooth")}
             className="ch-btn ch-btn-ghost absolute bottom-4 left-1/2 z-10 h-8 -translate-x-1/2 px-3"
             style={{ background: "var(--chaster-panel)" }}
-            aria-label="Scroll to latest messages"
+            aria-label={t("chat.scrollLatest")}
           >
             <IconDown size={13} />
-            Latest
+            {t("chat.latest")}
           </button>
         )}
       </div>
@@ -534,7 +540,7 @@ export default function ChatThread({
         className="px-4 py-3"
         style={{
           borderTop: "1px solid var(--chaster-border)",
-          background: "var(--chaster-panel)",
+          background: "transparent",
         }}
         data-tour="composer"
       >
@@ -542,20 +548,22 @@ export default function ChatThread({
           <div
             className="mb-2 flex items-start gap-2 rounded-md px-2.5 py-2"
             style={{
-              background: "var(--chaster-bg-soft, var(--chaster-bg))",
-              boxShadow: "inset 0 0 0 1px var(--chaster-border)",
+              background: "var(--chaster-panel-soft)",
+              boxShadow: "var(--chaster-inset-ring)",
             }}
           >
             <div
               className="mt-0.5 h-8 w-0.5 shrink-0"
-              style={{ background: "var(--chaster-accent, var(--chaster-ink))" }}
+              style={{ background: "var(--chaster-border-strong)" }}
             />
             <div className="min-w-0 flex-1">
               <div
                 className="text-[11px] font-semibold tracking-[-0.02em]"
                 style={{ color: "var(--chaster-ink)" }}
               >
-                Replying to {replyTo.direction === "outgoing" ? "desk" : "client"}
+                {replyTo.direction === "outgoing"
+                  ? t("chat.replyingToDesk")
+                  : t("chat.replyingToClient")}
               </div>
               <div
                 className="truncate text-[12px]"
@@ -564,13 +572,13 @@ export default function ChatThread({
                   fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
                 }}
               >
-                {previewText(replyTo)}
+                {previewText(replyTo, t)}
               </div>
             </div>
             <button
               type="button"
               className="ch-btn ch-btn-text h-7 w-7 shrink-0 px-0"
-              aria-label="Cancel reply"
+              aria-label={t("chat.cancelReply")}
               onClick={() => onReplyTo(null)}
             >
               <IconClose size={13} />
@@ -584,15 +592,15 @@ export default function ChatThread({
             fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
           }}
         >
-          {replyTo ? "Threaded reply as the Page" : "Reply as the Page"}
+          {replyTo ? t("chat.threadedReply") : t("chat.replyAsPage")}
         </div>
-        <div className="flex items-end gap-2">
+        <div className="ch-composer-well flex items-end gap-2">
           <textarea
             ref={draftRef}
             value={draft}
             onChange={(e) => onDraftChange(e.target.value)}
             disabled={sending}
-            placeholder={replyTo ? "Write your reply…" : "Write the next message…"}
+            placeholder={replyTo ? t("chat.writeReply") : t("chat.writeMessage")}
             rows={1}
             className="ch-input ch-msg-body min-h-[42px] flex-1 resize-none overflow-hidden px-3 py-2.5"
             onKeyDown={(e) => {
@@ -615,7 +623,7 @@ export default function ChatThread({
             className="ch-btn ch-btn-primary min-h-[42px] self-end px-3.5"
           >
             <IconSend size={15} />
-            {sending ? "…" : "Send"}
+            {sending ? t("chat.sending") : t("chat.send")}
           </button>
         </div>
       </form>

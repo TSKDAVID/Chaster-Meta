@@ -161,6 +161,43 @@ export async function sendPageTextMessage(
   return data as { recipient_id?: string; message_id?: string };
 }
 
+/** Send an image attachment (public HTTPS URL) as a native Messenger photo. */
+export async function sendPageImageMessage(
+  pageAccessToken: string,
+  recipientPsid: string,
+  imageUrl: string,
+  options?: { isReusable?: boolean },
+) {
+  const { graphVersion } = getMetaConfig();
+  const payload = {
+    recipient: { id: recipientPsid },
+    messaging_type: "RESPONSE",
+    message: {
+      attachment: {
+        type: "image",
+        payload: {
+          url: imageUrl,
+          is_reusable: options?.isReusable !== false,
+        },
+      },
+    },
+  };
+
+  const res = await fetch(
+    `https://graph.facebook.com/${graphVersion}/me/messages?access_token=${pageAccessToken}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message ?? "Failed to send photo");
+  }
+  return data as { recipient_id?: string; message_id?: string };
+}
+
 export async function reactToPageMessage(
   pageAccessToken: string,
   recipientPsid: string,

@@ -1,3 +1,10 @@
+import {
+  formatClock,
+  formatDay,
+  formatLongDay,
+  formatMonthDay,
+  formatWhen,
+} from "@/lib/format-time";
 import type { BookingMode, BookingSettings, WeekdayKey } from "@/lib/types";
 
 export const WEEKDAY_ORDER: WeekdayKey[] = [
@@ -81,60 +88,24 @@ export function bookingModeLabel(mode: BookingMode) {
 }
 
 export function bookingModeHint(mode: BookingMode) {
-  if (mode === "hourly") {
-    return "Haircuts, facials, tables — pick a clock time.";
-  }
-  if (mode === "day") {
-    return "One calendar day per booking (events, day-use).";
-  }
-  return "Check-in to check-out spans several nights.";
+  if (mode === "hourly") return "Haircuts, tables, calls";
+  if (mode === "day") return "Events, day use";
+  return "Stays, check-in to check-out";
 }
 
 export function formatBookingWhen(
   startsAt: string,
   endsAt: string,
   mode: BookingMode,
+  opts?: { hour12?: boolean },
 ) {
   const start = new Date(startsAt);
   const end = new Date(endsAt);
-  if (Number.isNaN(+start) || Number.isNaN(+end)) return "—";
+  if (Number.isNaN(+start) || Number.isNaN(+end)) return "";
 
-  if (mode === "hourly") {
-    const day = start.toLocaleDateString(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    });
-    const t0 = start.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    const t1 = end.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    return `${day} · ${t0}–${t1}`;
-  }
-
-  if (mode === "day") {
-    return start.toLocaleDateString(undefined, {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-
-  const a = start.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-  const b = end.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  return `${a} → ${b}`;
+  if (mode === "hourly") return formatWhen(start, end, opts);
+  if (mode === "day") return formatLongDay(start);
+  return `${formatMonthDay(start)} → ${formatMonthDay(end)}, ${end.getFullYear()}`;
 }
 
 export function statusLabel(status: string) {
@@ -260,20 +231,13 @@ export function hourlySlotStarts(
 export function formatSlotLabel(localStart: string, hour12: boolean) {
   const d = new Date(localStart);
   if (Number.isNaN(+d)) return localStart;
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12,
-  });
+  return formatClock(d, { hour12 });
 }
 
 export function formatDayHeader(ymd: string) {
   const d = parseYmd(ymd);
   if (!d) return ymd;
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    day: "numeric",
-  });
+  return formatDay(d);
 }
 
 export function formatMonthTitle(year: number, monthIndex: number) {

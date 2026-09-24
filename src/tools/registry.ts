@@ -1,10 +1,12 @@
-import { isModuleEntitled } from "@/modules/entitlements";
-import type { ModuleContext } from "@/modules/types";
 import { BOOKING_TOOLS } from "@/tools/bookings";
+import { CATALOG_TOOLS } from "@/tools/catalog";
+import { HOURS_TOOLS } from "@/tools/hours";
 import { MEDIA_TOOLS } from "@/tools/media";
 import { RESOURCE_TOOLS } from "@/tools/resources";
 import type { AiToolDefinition, ChasterTool } from "@/tools/types";
 import { parseToolArgsJson } from "@/tools/_shared";
+import { isModuleEntitled } from "@/modules/entitlements";
+import type { ModuleContext } from "@/modules/types";
 
 /**
  * Canonical tool catalog.
@@ -14,6 +16,8 @@ export const ALL_TOOLS: ChasterTool[] = [
   ...BOOKING_TOOLS,
   ...RESOURCE_TOOLS,
   ...MEDIA_TOOLS,
+  ...HOURS_TOOLS,
+  ...CATALOG_TOOLS,
 ];
 
 const BY_NAME = new Map(ALL_TOOLS.map((t) => [t.name, t]));

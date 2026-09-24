@@ -49,6 +49,7 @@ export async function POST(request: NextRequest) {
     name?: string;
     kind?: string;
     notes?: string | null;
+    icon?: string | null;
     open_time?: string | null;
     close_time?: string | null;
     open_days?: string[] | null;
@@ -74,6 +75,7 @@ export async function POST(request: NextRequest) {
       name: body.name ?? "",
       kind: normalizeKind(body.kind),
       notes: body.notes,
+      icon: body.icon,
       open_time: body.open_time,
       close_time: body.close_time,
       open_days: normalizeOptionalOpenDays(body.open_days),
@@ -98,6 +100,7 @@ export async function PATCH(request: NextRequest) {
     name?: string;
     kind?: string;
     notes?: string | null;
+    icon?: string | null;
     open_time?: string | null;
     close_time?: string | null;
     open_days?: string[] | null;
@@ -128,6 +131,7 @@ export async function PATCH(request: NextRequest) {
       name: body.name,
       kind: normalizeKind(body.kind),
       notes: body.notes,
+      icon: body.icon,
       open_time: body.open_time,
       close_time: body.close_time,
       open_days:

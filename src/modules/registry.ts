@@ -1,4 +1,6 @@
 import { bookingsModule } from "@/modules/bookings";
+import { catalogModule } from "@/modules/catalog";
+import { hoursModule } from "@/modules/hours";
 import { inboxModule } from "@/modules/inbox";
 import { knowledgeModule } from "@/modules/knowledge";
 import { mediaModule } from "@/modules/media";
@@ -14,6 +16,8 @@ import type { ModuleContext, ModuleId, ChasterModule } from "./types";
 export const ALL_MODULES: ChasterModule[] = [
   inboxModule,
   knowledgeModule,
+  hoursModule,
+  catalogModule,
   bookingsModule,
   resourcesModule,
   mediaModule,

@@ -5,7 +5,13 @@ import {
   getEntitlements,
   type ModuleContext,
 } from "@/modules";
-import type { BookingSettings, ResourceSummary } from "@/lib/types";
+import type {
+  BookingSettings,
+  CatalogItem,
+  MessagePlatform,
+  PageProfile,
+  ResourceSummary,
+} from "@/lib/types";
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_MODEL = "openai/gpt-oss-120b";
@@ -14,6 +20,8 @@ const BASE_SYSTEM_PROMPT = `You are Chaster's helpful Messenger assistant for Ch
 Reply briefly and naturally like a human chat agent (1-3 short sentences unless the user asks for detail).
 Be friendly, clear, and professional.
 Prefer answers from the provided FAQ / knowledge base when relevant.
+Use Hours & place and Catalog facts/tools when those modules provide them — never invent hours, addresses, or prices.
+When a customer asks to see a photo of a catalog item (or you want to show one), call send_photo — never paste image URLs as text links.
 If the knowledge base does not cover the question, say you are not sure and offer to help another way.
 Do not invent company policies, prices, or commitments.
 Never invent appointment availability or confirm booking changes without using the booking tools when they are available.`;
@@ -35,6 +43,10 @@ export type BookingToolContext = {
   customerName?: string | null;
   settings: BookingSettings;
   resources?: ResourceSummary[];
+  pageProfile?: PageProfile | null;
+  catalogItems?: CatalogItem[];
+  pageAccessToken?: string | null;
+  platform?: MessagePlatform;
 };
 
 type GroqMessage = {
@@ -58,9 +70,13 @@ function buildModuleContext(
     peerId: booking?.peerId ?? "",
     customerName: booking?.customerName ?? null,
     entitlements: getEntitlements(),
+    pageAccessToken: booking?.pageAccessToken ?? null,
+    platform: booking?.platform,
     bookingSettings: booking?.settings ?? null,
     resources: booking?.resources ?? [],
     knowledge,
+    pageProfile: booking?.pageProfile ?? null,
+    catalogItems: booking?.catalogItems ?? [],
   };
 }
 

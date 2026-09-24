@@ -1,4 +1,5 @@
 import { loadBookingSettings } from "@/lib/booking-ops";
+import { listCatalogItems } from "@/lib/catalog";
 import {
   generateMessengerReply,
   isAiAutoReplyEnabled,
@@ -7,6 +8,7 @@ import {
   type FaqKnowledgeItem,
 } from "@/lib/groq";
 import { sendPageTextMessage } from "@/lib/meta";
+import { loadPageProfile } from "@/lib/page-profile";
 import { loadActiveResources, toResourceSummary } from "@/lib/resource-ops";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import type { ConversationStatus, MessagePlatform } from "@/lib/types";
@@ -111,8 +113,17 @@ export async function loadBrainContext(input: {
   platform: MessagePlatform;
 }): Promise<BrainContext> {
   const supabase = getSupabaseAdmin();
-  const [{ data: page }, status, history, knowledge, settings, customerName, resourceRows] =
-    await Promise.all([
+  const [
+    { data: page },
+    status,
+    history,
+    knowledge,
+    settings,
+    customerName,
+    resourceRows,
+    pageProfile,
+    catalogItems,
+  ] = await Promise.all([
       supabase
         .from("messenger_pages")
         .select("page_id, page_access_token")
@@ -124,6 +135,8 @@ export async function loadBrainContext(input: {
       loadBookingSettings(input.pageId),
       loadCustomerName(input.pageId, input.customerId),
       loadActiveResources(input.pageId),
+      loadPageProfile(input.pageId),
+      listCatalogItems(input.pageId).catch(() => []),
     ]);
 
   const booking: BookingToolContext = {
@@ -132,6 +145,10 @@ export async function loadBrainContext(input: {
     customerName,
     settings,
     resources: resourceRows.map(toResourceSummary),
+    pageProfile,
+    catalogItems,
+    pageAccessToken: page?.page_access_token ?? null,
+    platform: input.platform,
   };
 
   return {

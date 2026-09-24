@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useI18n } from "@/components/I18nProvider";
 
 type Suggestion = {
   id: string;
@@ -32,6 +33,7 @@ export default function FaqSuggestionsPanel({
   onApproved,
   refreshKey = 0,
 }: Props) {
+  const { t } = useI18n();
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [loading, setLoading] = useState(true);
@@ -79,11 +81,11 @@ export default function FaqSuggestionsPanel({
     const draft = drafts[id];
     if (action === "approve") {
       if (!draft?.content.trim()) {
-        onError("Add content before approving.");
+        onError(t("faq.needContent"));
         return;
       }
       if (draft.entry_type === "qa" && !draft.question.trim()) {
-        onError("Add a question before approving this Q&A.");
+        onError(t("faq.needQuestion"));
         return;
       }
     }
@@ -118,48 +120,13 @@ export default function FaqSuggestionsPanel({
   }
 
   return (
-    <section
-      className="border p-4"
-      style={{
-        background: "var(--chaster-panel)",
-        borderColor: "var(--chaster-border)",
-        borderRadius: "var(--chaster-radius)",
-      }}
-    >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold tracking-[-0.02em]">
-            FAQ suggestions
-          </h2>
-          <p
-            className="text-xs"
-            style={{
-              color: "var(--chaster-muted)",
-              fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-            }}
-          >
-            Edit the draft, then approve into your library — or reject it.
-          </p>
-        </div>
-        {loading && (
-          <span className="text-xs" style={{ color: "var(--chaster-muted)" }}>
-            Loading…
-          </span>
-        )}
-      </div>
-
-      {suggestions.length === 0 ? (
-        <p
-          className="text-sm"
-          style={{
-            color: "var(--chaster-muted)",
-            fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-          }}
-        >
-          No pending suggestions. End a chat to generate some.
-        </p>
+    <div className="ch-faq">
+      {loading && suggestions.length === 0 ? (
+        <div className="ch-empty-line">{t("common.loading")}</div>
+      ) : suggestions.length === 0 ? (
+        <div className="ch-empty-line">{t("faq.noPending")}</div>
       ) : (
-        <ul className="max-h-[28rem] space-y-3 overflow-y-auto">
+        <ul className="ch-faq-list">
           {suggestions.map((s) => {
             const draft = drafts[s.id] ?? {
               question: s.question ?? "",
@@ -167,141 +134,93 @@ export default function FaqSuggestionsPanel({
               entry_type: s.entry_type,
             };
             return (
-              <li
-                key={s.id}
-                className="border px-3 py-3"
-                style={{
-                  borderColor: "var(--chaster-border)",
-                  borderRadius: "var(--chaster-radius)",
-                }}
-              >
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span
-                    className="px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wide uppercase"
-                    style={{ color: "var(--chaster-warn-text)" }}
-                  >
-                    Pending
-                  </span>
-                  <span className="font-mono text-[11px]" style={{ color: "var(--chaster-muted)" }}>
-                    peer {s.peer_id}
-                  </span>
-                </div>
+              <li key={s.id} className="ch-faq-row is-open">
+                <div className="ch-faq-editor">
+                  <div className="ch-suggest-head">
+                    <div
+                      className="ch-seg ch-seg-compact"
+                      role="radiogroup"
+                      aria-label={t("faq.entryType")}
+                    >
+                      <button
+                        type="button"
+                        className={`ch-seg-tab${draft.entry_type === "qa" ? " is-active" : ""}`}
+                        onClick={() => updateDraft(s.id, { entry_type: "qa" })}
+                      >
+                        {t("faq.qa")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`ch-seg-tab${draft.entry_type === "info" ? " is-active" : ""}`}
+                        onClick={() => updateDraft(s.id, { entry_type: "info" })}
+                      >
+                        {t("faq.info")}
+                      </button>
+                    </div>
+                    <span className="ch-tag is-warn">{t("faq.pending")}</span>
+                  </div>
 
-                <p
-                  className="mb-3 text-xs leading-relaxed"
-                  style={{
-                    color: "var(--chaster-muted)",
-                    fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-                  }}
-                >
-                  <span className="font-medium" style={{ color: "var(--chaster-ink)" }}>
-                    Chat summary ·{" "}
-                  </span>
-                  {s.chat_summary}
-                </p>
+                  <p className="ch-suggest-summary">
+                    <span className="ch-suggest-summary-label">{t("faq.fromChat")}</span>
+                    {s.chat_summary}
+                  </p>
 
-                <div className="mb-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => updateDraft(s.id, { entry_type: "qa" })}
-                    className="ch-btn h-7 px-2.5 text-[11px]"
-                    style={
-                      draft.entry_type === "qa"
-                        ? {
-                            background: "var(--chaster-accent)",
-                            color: "var(--chaster-on-accent)",
-                            border: "1px solid transparent",
-                          }
-                        : {
-                            background: "transparent",
-                            color: "var(--chaster-muted)",
-                            border: "1px solid var(--chaster-border)",
-                          }
-                    }
-                  >
-                    Q&A
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateDraft(s.id, { entry_type: "info" })}
-                    className="ch-btn h-7 px-2.5 text-[11px]"
-                    style={
-                      draft.entry_type === "info"
-                        ? {
-                            background: "var(--chaster-accent)",
-                            color: "var(--chaster-on-accent)",
-                            border: "1px solid transparent",
-                          }
-                        : {
-                            background: "transparent",
-                            color: "var(--chaster-muted)",
-                            border: "1px solid var(--chaster-border)",
-                          }
-                    }
-                  >
-                    Info
-                  </button>
-                </div>
+                  {draft.entry_type === "qa" ? (
+                    <label className="ch-field">
+                      <span className="ch-label">{t("faq.question")}</span>
+                      <input
+                        value={draft.question}
+                        onChange={(e) =>
+                          updateDraft(s.id, { question: e.target.value })
+                        }
+                        className="ch-input w-full px-2.5 py-2"
+                      />
+                    </label>
+                  ) : null}
 
-                {draft.entry_type === "qa" && (
-                  <label className="mb-2 block space-y-1">
-                    <span className="text-[11px]" style={{ color: "var(--chaster-muted)" }}>
-                      Question
+                  <label className="ch-field">
+                    <span className="ch-label">
+                      {draft.entry_type === "qa" ? t("faq.answer") : t("faq.info")}
                     </span>
-                    <input
-                      value={draft.question}
-                      onChange={(e) => updateDraft(s.id, { question: e.target.value })}
-                      className="ch-input w-full px-2.5 py-2 text-[13px]"
-                      placeholder="Suggested question…"
+                    <textarea
+                      value={draft.content}
+                      onChange={(e) =>
+                        updateDraft(s.id, { content: e.target.value })
+                      }
+                      rows={4}
+                      className="ch-input w-full resize-y px-2.5 py-2"
                     />
                   </label>
-                )}
 
-                <label className="block space-y-1">
-                  <span className="text-[11px]" style={{ color: "var(--chaster-muted)" }}>
-                    {draft.entry_type === "qa" ? "Answer" : "Info"}
-                  </span>
-                  <textarea
-                    value={draft.content}
-                    onChange={(e) => updateDraft(s.id, { content: e.target.value })}
-                    rows={4}
-                    className="ch-input ch-msg-body w-full resize-y px-2.5 py-2 text-[13px] leading-relaxed"
-                    placeholder="Suggested content…"
-                  />
-                </label>
+                  {s.overlap_note ? (
+                    <p className="ch-suggest-note">{s.overlap_note}</p>
+                  ) : null}
 
-                {s.overlap_note && (
-                  <p
-                    className="mt-1.5 text-xs"
-                    style={{ color: "var(--chaster-success-text)" }}
-                  >
-                    Why new: {s.overlap_note}
-                  </p>
-                )}
-
-                <div className="mt-3 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={busyId === s.id}
-                    onClick={() => void review(s.id, "approve")}
-                    className="ch-btn ch-btn-primary h-8 px-3 text-[12px]"
-                  >
-                    {busyId === s.id ? "…" : "Approve edited → FAQ"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busyId === s.id}
-                    onClick={() => void review(s.id, "reject")}
-                    className="ch-btn ch-btn-ghost h-8 px-3 text-[12px]"
-                  >
-                    Reject
-                  </button>
+                  <div className="ch-faq-editor-actions">
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      disabled={busyId === s.id}
+                      onClick={() => void review(s.id, "reject")}
+                      className="ch-btn ch-btn-text h-8 px-2.5"
+                    >
+                      {t("faq.reject")}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busyId === s.id}
+                      onClick={() => void review(s.id, "approve")}
+                      className="ch-btn ch-btn-primary h-8 px-3"
+                    >
+                      {busyId === s.id ? t("common.saving") : t("faq.approve")}
+                    </button>
+                  </div>
                 </div>
               </li>
             );
           })}
         </ul>
       )}
-    </section>
+    </div>
   );
 }

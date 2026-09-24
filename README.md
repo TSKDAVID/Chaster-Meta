@@ -14,15 +14,19 @@ Operator portal for Meta Messenger (and Instagram-ready channels): OAuth Page co
    - `supabase/schema-resources.sql` — bookable resources + `resource_id` on bookings
    - `supabase/schema-resource-links.sql` — service kind, associations, `assigned_resource_id`
    - `supabase/schema-open-days.sql` — store + resource open days of week
+   - `supabase/schema-page-profile.sql` — hours & place profile
+   - `supabase/schema-catalog.sql` — priced catalog items
 3. `npm run dev` and `npm run tunnel` (cloudflared)
 4. Point Meta webhook at `https://YOUR_TUNNEL/api/webhooks/meta`
 
 ## Portal UX
 
-- Navbar: Connect / Disconnect Page, Knowledge toggle, profile settings
+- Navbar: Inbox, Bookings, FAQs, Hours, Catalog; Connect / Disconnect; profile
 - Inbox: search, Messenger/Instagram filter, AI/Human/Ended badges
 - Thread: handover, continue with AI, end chat
-- Knowledge drawer: FAQ + approval suggestions
+- Knowledge: FAQ + approval suggestions
+- Hours & place: address, contact, open hours (synced into bookings when present)
+- Catalog: products/services with prices for AI quotes
 - First-visit product tour (restart from profile)
 
 ## Meta checklist

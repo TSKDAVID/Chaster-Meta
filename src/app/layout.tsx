@@ -58,17 +58,28 @@ const themeBootScript = `
   try {
     var raw = localStorage.getItem('chaster_operator_prefs_v1');
     var theme = 'slate';
+    var custom = null;
     if (raw) {
       var parsed = JSON.parse(raw);
       if (parsed && parsed.v === 2 && parsed.byAccount) {
         var id = parsed.lastAccountId || 'local';
         var account = parsed.byAccount[id] || parsed.byAccount.local;
         if (account && typeof account.theme === 'string') theme = account.theme;
+        if (account && account.customColors) custom = account.customColors;
       } else if (parsed && typeof parsed.theme === 'string') {
         theme = parsed.theme;
+        if (parsed.customColors) custom = parsed.customColors;
       }
     }
     document.documentElement.setAttribute('data-theme', theme);
+    if (theme === 'custom' && custom && custom.base && custom.panel && custom.accent) {
+      var root = document.documentElement;
+      root.style.setProperty('--background', custom.base);
+      root.style.setProperty('--chaster-panel', custom.panel);
+      root.style.setProperty('--chaster-chat-bg', custom.panel);
+      root.style.setProperty('--chaster-header', custom.panel);
+      root.style.setProperty('--chaster-accent', custom.accent);
+    }
   } catch (e) {}
 })();
 `;

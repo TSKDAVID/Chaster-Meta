@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
-import FaqPanel from "@/components/FaqPanel";
+import { useEffect, useState } from "react";
+import DeskToolbar, { Segmented } from "@/components/DeskToolbar";
+import FaqPanel, { type FaqAddRequest } from "@/components/FaqPanel";
 import FaqSuggestionsPanel from "@/components/FaqSuggestionsPanel";
-import { IconBack, IconBook, IconLamp } from "@/components/icons";
+import { useI18n } from "@/components/I18nProvider";
+import { IconSearch } from "@/components/icons";
 import type { KnowledgeDeskTab } from "@/lib/desk-routes";
 
 type Props = {
@@ -30,7 +32,15 @@ export default function KnowledgeDrawer({
   onTabChange,
   initialTab = "faq",
 }: Props) {
+  const { t } = useI18n();
   const tab = tabProp ?? initialTab;
+  const [search, setSearch] = useState("");
+  const [addRequest, setAddRequest] = useState<FaqAddRequest | null>(null);
+
+  const tabs = [
+    ["faq", t("faq.library")],
+    ["suggestions", t("faq.suggestions")],
+  ] as const;
 
   useEffect(() => {
     if (!open || !onClose) return;
@@ -43,79 +53,68 @@ export default function KnowledgeDrawer({
 
   if (!open) return null;
 
-  function go(next: KnowledgeDeskTab) {
-    onTabChange?.(next);
+  function requestAdd(mode: "qa" | "info") {
+    setAddRequest({ mode, token: Date.now() });
   }
 
   return (
     <div
       data-tour="knowledge-drawer"
-      className="ch-desk-page-panel flex h-full min-h-0 w-full flex-col overflow-hidden"
+      className="ch-page"
       aria-labelledby="knowledge-page-title"
     >
-      <div className="ch-page-head">
-        <div className="ch-page-head-start min-w-0">
-          <h2
-            id="knowledge-page-title"
-            className="ch-headline text-[16px] font-semibold tracking-[-0.04em]"
-            style={{ color: "var(--chaster-ink)" }}
-          >
-            FAQs & answers
-          </h2>
-          <p
-            className="mt-0.5 text-[12px]"
-            style={{
-              color: "var(--chaster-muted)",
-              fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
-            }}
-          >
-            What the AI should know when it replies
-          </p>
-        </div>
-        <nav className="ch-subnav" aria-label="FAQ views">
-          <button
-            type="button"
-            data-tour="faq-tab"
-            onClick={() => go("faq")}
-            className={`ch-subnav-tab${tab === "faq" ? " is-active" : ""}`}
-            aria-current={tab === "faq" ? "page" : undefined}
-          >
-            <IconBook size={13} />
-            Library
-          </button>
-          <button
-            type="button"
-            data-tour="suggestions-tab"
-            onClick={() => go("suggestions")}
-            className={`ch-subnav-tab${tab === "suggestions" ? " is-active" : ""}`}
-            aria-current={tab === "suggestions" ? "page" : undefined}
-          >
-            <IconLamp size={13} />
-            Suggestions
-          </button>
-        </nav>
-        <div className="ch-page-head-end">
-          {onClose ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="ch-btn ch-btn-ghost ch-desk-back h-8 shrink-0 gap-1.5 px-2"
-              aria-label="Back to inbox"
-            >
-              <IconBack size={14} />
-              <span className="text-[12px]">Inbox</span>
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <DeskToolbar
+        title={t("faq.title")}
+        titleId="knowledge-page-title"
+        onBack={onClose}
+        nav={
+          <Segmented
+            value={tab}
+            options={tabs}
+            onChange={(next) => onTabChange?.(next)}
+            ariaLabel={t("faq.views")}
+            tourIds={{ faq: "faq-tab", suggestions: "suggestions-tab" }}
+          />
+        }
+        end={
+          tab === "faq" ? (
+            <>
+              <label className="ch-search">
+                <IconSearch size={13} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t("common.search")}
+                  aria-label={t("common.search")}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => requestAdd("info")}
+                className="ch-btn ch-btn-ghost h-8 px-3"
+              >
+                {t("faq.generalInfo")}
+              </button>
+              <button
+                type="button"
+                onClick={() => requestAdd("qa")}
+                className="ch-btn ch-btn-primary h-8 px-3"
+              >
+                {t("common.add")} {t("faq.qa")}
+              </button>
+            </>
+          ) : null
+        }
+      />
 
-      <div
-        key={tab}
-        className="ch-subpage min-h-0 flex-1 overflow-y-auto p-4 sm:p-5"
-        style={{ background: "var(--chaster-panel)" }}
-      >
+      <div key={tab} className="ch-page-body">
         {tab === "faq" ? (
-          <FaqPanel onError={onError} refreshKey={faqKey} />
+          <FaqPanel
+            onError={onError}
+            refreshKey={faqKey}
+            search={search}
+            addRequest={addRequest}
+          />
         ) : (
           <FaqSuggestionsPanel
             onError={onError}

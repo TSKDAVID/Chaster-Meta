@@ -17,3 +17,5 @@ export {
 export { BOOKING_TOOLS } from "./bookings";
 export { RESOURCE_TOOLS } from "./resources";
 export { MEDIA_TOOLS } from "./media";
+export { HOURS_TOOLS } from "./hours";
+export { CATALOG_TOOLS } from "./catalog";

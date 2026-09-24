@@ -80,6 +80,8 @@ export type BookableResource = {
   active: boolean;
   sort_order: number;
   notes: string | null;
+  /** Lucide icon key for services/rooms (see service-icons). */
+  icon: string | null;
   /** Null = inherit Page booking settings hours. */
   open_time: string | null;
   close_time: string | null;
@@ -120,6 +122,58 @@ export type Booking = {
   ends_at: string;
   status: BookingStatus;
   source: "desk" | "ai";
+  created_at: string;
+  updated_at: string;
+};
+
+/** Hours & place profile for AI + desk (per Page). */
+export type PageProfile = {
+  page_id: string;
+  address_line: string | null;
+  city: string | null;
+  region: string | null;
+  postal_code: string | null;
+  country: string | null;
+  maps_url: string | null;
+  phone: string | null;
+  email: string | null;
+  timezone: string;
+  open_time: string;
+  close_time: string;
+  open_days: WeekdayKey[];
+  hours_note: string | null;
+  updated_at?: string;
+};
+
+/** Priced catalog / menu item. */
+export type CatalogAvailability = "in_stock" | "seasonal" | "ask";
+
+export type CatalogVariant = {
+  id: string;
+  name: string;
+  price: number | null;
+  unit: string | null;
+};
+
+export type CatalogItem = {
+  id: string;
+  page_id: string;
+  name: string;
+  description: string | null;
+  price: number | null;
+  currency: string;
+  unit: string | null;
+  category: string | null;
+  image_url: string | null;
+  availability: CatalogAvailability;
+  tags: string[];
+  variants: CatalogVariant[];
+  /** True for services or unlimited inventory. */
+  stock_unlimited: boolean;
+  /** Units on hand when stock_unlimited is false. */
+  stock_qty: number | null;
+  active: boolean;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 };
