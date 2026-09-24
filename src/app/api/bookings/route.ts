@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { checkAvailability, loadBookingSettings } from "@/lib/booking-ops";
+import {
+  checkAvailability,
+  isCapacityConflictError,
+  loadBookingSettings,
+} from "@/lib/booking-ops";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import type { BookingStatus } from "@/lib/types";
 
@@ -177,7 +181,14 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: isCapacityConflictError(error)
+          ? "That team member was just booked for another service. Please choose another time."
+          : error.message,
+      },
+      { status: isCapacityConflictError(error) ? 409 : 500 },
+    );
   }
 
   return NextResponse.json({ booking: data });
@@ -239,7 +250,14 @@ export async function PATCH(request: NextRequest) {
     .maybeSingle();
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: isCapacityConflictError(error)
+          ? "That team member is already booked for another service at this time."
+          : error.message,
+      },
+      { status: isCapacityConflictError(error) ? 409 : 500 },
+    );
   }
 
   return NextResponse.json({ booking: data });

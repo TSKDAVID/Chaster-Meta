@@ -30,6 +30,11 @@ import {
   type BookingDeskTab,
 } from "@/lib/desk-routes";
 import {
+  combinedProviderWindow,
+  effectiveWindowForPair,
+  parseHmMinutes,
+} from "@/lib/resource-hours";
+import {
   IconBack,
   IconCalendar,
   IconChevron,
@@ -93,11 +98,18 @@ function kindLabel(kind: ResourceKind) {
 function kindBlurb(kind: ResourceKind) {
   if (kind === "staff") return "A person who can take appointments.";
   if (kind === "service")
-    return "Something customers book. Connect who (or which room) can provide it.";
-  if (kind === "room") return "A space that can be booked or used for a service.";
+    return "Something customers book. Connect staff who can provide it — bookable only where service hours and staff hours overlap.";
+  if (kind === "room")
+    return "A space where selected services can be provided.";
   if (kind === "equipment")
-    return "Gear that can be booked or used for a service.";
+    return "Gear that can be assigned to selected services.";
   return "Anything else you want on the calendar.";
+}
+
+function canProvideServiceLocal(r: BookableResource): boolean {
+  if (r.kind === "service") return false;
+  if (r.kind === "staff") return r.serviceable !== false;
+  return r.serviceable === true;
 }
 
 function KindMark({ kind }: { kind: ResourceKind }) {
@@ -125,22 +137,48 @@ function linkSummary(
   const offered = all.filter(
     (s) => s.kind === "service" && (s.linked_ids ?? []).includes(r.id),
   );
-  if (offered.length === 0) {
+  if (r.kind === "staff") {
+    if (offered.length === 0) {
+      return {
+        line: "Not on any service yet — connect them from Services & rooms",
+        tone: "muted",
+      };
+    }
     return {
-      line:
-        r.kind === "staff"
-          ? "Not on any service yet — connect them from Services & rooms"
-          : "Not on any service yet",
+      line: `On ${offered
+        .slice(0, 3)
+        .map((s) => s.name)
+        .join(", ")}${offered.length > 3 ? "…" : ""}`,
+      tone: "ok",
+    };
+  }
+  // Rooms / equipment / other: show services here + staff here.
+  const staffHere = (r.linked_ids ?? [])
+    .map((id) => all.find((x) => x.id === id && x.kind === "staff")?.name)
+    .filter(Boolean) as string[];
+  const bits: string[] = [];
+  if (offered.length > 0) {
+    bits.push(
+      `${offered.length} service${offered.length === 1 ? "" : "s"}: ${offered
+        .slice(0, 2)
+        .map((s) => s.name)
+        .join(", ")}${offered.length > 2 ? "…" : ""}`,
+    );
+  }
+  if (staffHere.length > 0) {
+    bits.push(
+      `${staffHere.length} staff: ${staffHere.slice(0, 2).join(", ")}${
+        staffHere.length > 2 ? "…" : ""
+      }`,
+    );
+  }
+  if (bits.length === 0) {
+    return {
+      line: "Empty room — add services, and optionally staff",
       tone: "muted",
     };
   }
-  return {
-    line: `On ${offered
-      .slice(0, 3)
-      .map((s) => s.name)
-      .join(", ")}${offered.length > 3 ? "…" : ""}`,
-    tone: "ok",
-  };
+  return { line: bits.join(" · "), tone: "ok" };
 }
 
 function isBufferPreset(mins: number) {
@@ -218,6 +256,9 @@ export default function BookingDrawer({
   );
   const [editingNameId, setEditingNameId] = useState<string | null>(null);
   const [editNameDraft, setEditNameDraft] = useState("");
+  const [staffPickerRoomIds, setStaffPickerRoomIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const today = useMemo(() => {
     const d = new Date();
@@ -393,13 +434,24 @@ export default function BookingDrawer({
     );
   }
 
-  function capacityIdsFor(primaryId: string): string[] {
+  function capacityResourcesFor(primaryId: string): BookableResource[] {
     const primary = activeResources.find((r) => r.id === primaryId);
-    if (!primary) return [primaryId];
-    const linked = (primary.linked_ids ?? []).filter((id) =>
-      activeResources.some((r) => r.id === id),
-    );
-    return linked.length > 0 ? linked : [primaryId];
+    if (!primary) return [];
+    if (primary.kind === "service") {
+      const hasAssignedStaff = (primary.linked_ids ?? []).some((id) =>
+        resources.some(
+          (resource) => resource.id === id && resource.kind === "staff",
+        ),
+      );
+      const linkedStaff = (primary.linked_ids ?? [])
+        .map((id) => activeResources.find((r) => r.id === id))
+        .filter(
+          (resource): resource is BookableResource =>
+            resource?.kind === "staff" && canProvideServiceLocal(resource),
+        );
+      return hasAssignedStaff ? linkedStaff : [primary];
+    }
+    return [primary];
   }
 
   function isCapacityBusy(capacityId: string, start: number, end: number) {
@@ -416,10 +468,50 @@ export default function BookingDrawer({
     );
   }
 
-  /** Primary is taken only when every capacity unit under it is busy. */
+  function isCapacityWorking(
+    primary: BookableResource,
+    capacity: BookableResource,
+    start: number,
+    end: number,
+  ) {
+    if (!settings) return false;
+    const window = effectiveWindowForPair({
+      primary,
+      capacity,
+      fallback: {
+        open_time: settings.open_time,
+        close_time: settings.close_time,
+        open_days: settings.open_days,
+      },
+    });
+    if (!window) return false;
+
+    const starts = new Date(start);
+    const ends = new Date(end);
+    if (starts.toDateString() !== ends.toDateString()) return false;
+    const day = weekdayKeyFromYmd(toYmd(starts));
+    if (!day || !window.open_days.includes(day)) return false;
+
+    const startMinutes = starts.getHours() * 60 + starts.getMinutes();
+    const endMinutes = ends.getHours() * 60 + ends.getMinutes();
+    const opens = parseHmMinutes(window.open_time);
+    const closes = parseHmMinutes(window.close_time);
+    return (
+      opens != null &&
+      closes != null &&
+      startMinutes >= opens &&
+      endMinutes <= closes
+    );
+  }
+
+  /** Primary is taken when no assigned capacity unit is working and free. */
   function isPrimaryTaken(primaryId: string, start: number, end: number) {
-    return capacityIdsFor(primaryId).every((id) =>
-      isCapacityBusy(id, start, end),
+    const primary = activeResources.find((r) => r.id === primaryId);
+    if (!primary) return true;
+    return capacityResourcesFor(primaryId).every(
+      (capacity) =>
+        !isCapacityWorking(primary, capacity, start, end) ||
+        isCapacityBusy(capacity.id, start, end),
     );
   }
 
@@ -452,10 +544,15 @@ export default function BookingDrawer({
 
   function dayHasConflict(ymd: string) {
     if (mode === "hourly") {
+      const picked =
+        resourcePick === "any"
+          ? null
+          : activeResources.find((resource) => resource.id === resourcePick);
+      const window = picked ? availabilityWindowFor(picked) : null;
       const slotsList = hourlySlotStarts(
         ymd,
-        settings?.open_time ?? "09:00",
-        settings?.close_time ?? "18:00",
+        window?.open_time ?? settings?.open_time ?? "09:00",
+        window?.close_time ?? settings?.close_time ?? "18:00",
         settings?.slot_minutes ?? 60,
       );
       return slotsList.every((slot) => isSlotTaken(slot));
@@ -471,10 +568,39 @@ export default function BookingDrawer({
     return isIntervalTaken(start, end);
   }
 
+  function availabilityWindowFor(resource: BookableResource) {
+    if (!settings) return null;
+    const fallback = {
+      open_time: settings.open_time,
+      close_time: settings.close_time,
+      open_days: settings.open_days,
+    };
+    const capacities = capacityResourcesFor(resource.id);
+    if (resource.kind === "service" && capacities.length === 0) return null;
+    if (
+      resource.kind === "service" &&
+      capacities.some((capacity) => capacity.id !== resource.id)
+    ) {
+      return combinedProviderWindow({
+        primary: resource,
+        providers: capacities,
+        fallback,
+      });
+    }
+    return effectiveWindowForPair({
+      primary: resource,
+      capacity: resource,
+      fallback,
+    });
+  }
+
   function effectiveOpenDays(): WeekdayKey[] {
     if (resourcePick !== "any") {
       const r = activeResources.find((x) => x.id === resourcePick);
-      if (r?.open_days && r.open_days.length > 0) return r.open_days;
+      if (r) {
+        const window = availabilityWindowFor(r);
+        if (window) return window.open_days;
+      }
     }
     return settings?.open_days ?? DEFAULT_BOOKING_SETTINGS.open_days;
   }
@@ -495,10 +621,15 @@ export default function BookingDrawer({
   const slots = useMemo(() => {
     if (mode !== "hourly" || !selectedYmd || !settings) return [];
     const slotMs = settings.slot_minutes * 60_000;
+    const picked =
+      resourcePick === "any"
+        ? null
+        : activeResources.find((resource) => resource.id === resourcePick);
+    const window = picked ? availabilityWindowFor(picked) : null;
     return hourlySlotStarts(
       selectedYmd,
-      settings.open_time,
-      settings.close_time,
+      window?.open_time ?? settings.open_time,
+      window?.close_time ?? settings.close_time,
       settings.slot_minutes,
     ).map((local) => {
       const start = new Date(local).getTime();
@@ -707,6 +838,7 @@ export default function BookingDrawer({
       close_time: string | null;
       open_days: WeekdayKey[] | null;
       linked_ids: string[];
+      serviceable: boolean;
     }>,
   ) {
     if (!pageId) return;
@@ -805,14 +937,28 @@ export default function BookingDrawer({
     const customDays = Boolean(r.open_days?.length);
     const effectiveDays =
       customDays && r.open_days ? r.open_days : s.open_days;
-    const providers = resources.filter(
+    const fallbackWindow = {
+      open_time: s.open_time,
+      close_time: s.close_time,
+      open_days: s.open_days,
+    };
+    const eligibleProviders = resources.filter(
       (o) =>
         o.id !== r.id &&
-        (o.kind === "staff" ||
-          o.kind === "room" ||
-          o.kind === "equipment" ||
-          o.kind === "other"),
+        o.kind === "staff" &&
+        canProvideServiceLocal(o),
     );
+    const linkedProviders = resources.filter(
+      (o) => o.kind === "staff" && linked.has(o.id),
+    );
+    const combinedStaffWindow =
+      r.kind === "service" && linkedProviders.length > 0
+        ? combinedProviderWindow({
+            primary: r,
+            providers: linkedProviders,
+            fallback: fallbackWindow,
+          })
+        : null;
     const onServices = resources.filter(
       (svc) =>
         svc.kind === "service" && (svc.linked_ids ?? []).includes(r.id),
@@ -870,16 +1016,16 @@ export default function BookingDrawer({
               Who can provide this?
             </div>
             <p className="ch-res-help">
-              Check everyone (or every room) that offers this. If any one of
-              them is free, customers can book it.
+              Select the team members who provide this service. Their combined
+              working hours become the service hours automatically.
             </p>
-            {providers.length === 0 ? (
+            {eligibleProviders.length === 0 ? (
               <p className="ch-res-empty-hint">
                 Add team members under Team first, then come back here.
               </p>
             ) : (
               <div className="ch-res-links">
-                {providers.map((o) => {
+                {eligibleProviders.map((o) => {
                   const checked = linked.has(o.id);
                   return (
                     <label
@@ -913,18 +1059,71 @@ export default function BookingDrawer({
                 })}
               </div>
             )}
+            {linkedProviders.length > 0 ? (
+              <div className="ch-res-effective">
+                <div className="ch-res-block-label" style={{ marginTop: "0.75rem" }}>
+                  <IconClock size={12} />
+                  Effective hours per person
+                </div>
+                <ul className="ch-res-effective-list">
+                  {linkedProviders.map((o) => {
+                    const window = effectiveWindowForPair({
+                      primary: r,
+                      capacity: o,
+                      fallback: fallbackWindow,
+                    });
+                    return (
+                      <li key={o.id}>
+                        <span className="ch-res-effective-name">{o.name}</span>
+                        {window ? (
+                          <span className="ch-res-effective-hours">
+                            {window.open_time}–{window.close_time} ·{" "}
+                            {window.open_days.map(weekdayLabel).join(" · ")}
+                          </span>
+                        ) : (
+                          <span className="ch-res-effective-none">
+                            No overlap with service hours — never bookable
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ) : null}
           </section>
-        ) : (
+        ) : r.kind === "staff" ? (
           <section className="ch-res-block">
             <div className="ch-res-block-label">
               <IconLayers size={12} />
-              Services this appears on
+              Services this person does
             </div>
+            <label className="ch-res-serviceable">
+              <input
+                type="checkbox"
+                checked={canProvideServiceLocal(r)}
+                disabled={saving}
+                onChange={(e) =>
+                  void patchResource(r.id, {
+                    serviceable: e.target.checked,
+                  })
+                }
+                style={{ accentColor: "var(--chaster-accent)" }}
+              />
+              <span>
+                <span className="ch-res-serviceable-title">
+                  Can provide services
+                </span>
+                <span className="ch-res-serviceable-hint">
+                  Uncheck if this person never takes service bookings.
+                </span>
+              </span>
+            </label>
             {onServices.length === 0 ? (
               <p className="ch-res-help">
-                {r.kind === "staff"
-                  ? "Not connected yet. Open Services & rooms, pick a service, and check this name."
-                  : "Not connected to a service yet. Open a service and check this under Who can provide this?"}
+                Not connected yet. Open Services & rooms, pick a service, and
+                check this name — or open a room and add them under “Staff in
+                this room”.
               </p>
             ) : (
               <ul className="ch-res-chip-list">
@@ -944,84 +1143,370 @@ export default function BookingDrawer({
                 ))}
               </ul>
             )}
+            {(() => {
+              const roomsHere = resources.filter(
+                (o) =>
+                  (o.kind === "room" ||
+                    o.kind === "equipment" ||
+                    o.kind === "other") &&
+                  (o.linked_ids ?? []).includes(r.id),
+              );
+              return (
+                <>
+                  <div
+                    className="ch-res-block-label"
+                    style={{ marginTop: "0.85rem" }}
+                  >
+                    <IconLink size={12} />
+                    Rooms they work in
+                  </div>
+                  {roomsHere.length === 0 ? (
+                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
+                      Not assigned to a room yet — open a room and check them
+                      under “Staff in this room”.
+                    </p>
+                  ) : (
+                    <ul className="ch-res-chip-list">
+                      {roomsHere.map((room) => (
+                        <li key={room.id}>
+                          <button
+                            type="button"
+                            className="ch-res-chip"
+                            onClick={() => {
+                              setTab("catalog");
+                              setSelectedResourceId(room.id);
+                            }}
+                          >
+                            {room.name}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              );
+            })()}
+          </section>
+        ) : (
+          <section className="ch-res-block">
+            <div className="ch-res-block-label">
+              <IconLayers size={12} />
+              What happens in this {r.kind === "room" ? "room" : r.kind}
+            </div>
+            <label className="ch-res-serviceable">
+              <input
+                type="checkbox"
+                checked={canProvideServiceLocal(r)}
+                disabled={saving}
+                onChange={(e) =>
+                  void patchResource(r.id, {
+                    serviceable: e.target.checked,
+                  })
+                }
+                style={{ accentColor: "var(--chaster-accent)" }}
+              />
+              <span>
+                <span className="ch-res-serviceable-title">
+                  {r.kind === "room"
+                    ? "Services can be provided here"
+                    : "Can be used for services"}
+                </span>
+                <span className="ch-res-serviceable-hint">
+                  Turn this on to assign services to this {r.kind}.
+                </span>
+              </span>
+            </label>
+            {(() => {
+              const allServices = resources.filter(
+                (o) => o.kind === "service",
+              );
+              const allStaff = resources.filter(
+                (o) => o.kind === "staff" && o.id !== r.id,
+              );
+              const staffHere = new Set(r.linked_ids ?? []);
+              const staffPickerEnabled =
+                staffHere.size > 0 || staffPickerRoomIds.has(r.id);
+              async function toggleServiceInRoom(
+                svc: BookableResource,
+                include: boolean,
+              ) {
+                const current = new Set(svc.linked_ids ?? []);
+                if (include) current.add(r.id);
+                else current.delete(r.id);
+                await patchResource(svc.id, { linked_ids: [...current] });
+              }
+              async function toggleStaffInRoom(
+                staffId: string,
+                include: boolean,
+              ) {
+                const current = new Set(r.linked_ids ?? []);
+                if (include) current.add(staffId);
+                else current.delete(staffId);
+                await patchResource(r.id, { linked_ids: [...current] });
+              }
+              return (
+                <>
+                  <div className="ch-res-block-label">
+                    <IconLayers size={12} />
+                    Services in this {r.kind}
+                  </div>
+                  {!canProvideServiceLocal(r) ? (
+                    <p className="ch-res-help">
+                      Enable the option above first, then choose which services
+                      can be provided {r.kind === "room" ? "here" : `with this ${r.kind}`}.
+                    </p>
+                  ) : allServices.length === 0 ? (
+                    <p className="ch-res-help">
+                      No services yet — add one under Services & rooms first.
+                    </p>
+                  ) : (
+                    <div className="ch-res-links">
+                      {allServices.map((svc) => {
+                        const checked = (svc.linked_ids ?? []).includes(r.id);
+                        return (
+                          <label
+                            key={svc.id}
+                            className={`ch-res-link${checked ? " is-on" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={saving}
+                              onChange={(e) =>
+                                void toggleServiceInRoom(svc, e.target.checked)
+                              }
+                            />
+                            <span
+                              className="ch-res-link-mark"
+                              aria-hidden
+                            >
+                              <KindMark kind={svc.kind} />
+                            </span>
+                            <span className="ch-res-link-text">
+                              <span className="ch-res-link-name">
+                                {svc.name}
+                              </span>
+                              <span className="ch-res-link-kind">
+                                {(() => {
+                                  const w = effectiveWindowForPair({
+                                    primary: svc,
+                                    capacity: r,
+                                    fallback: fallbackWindow,
+                                  });
+                                  return w
+                                    ? `${w.open_time}–${w.close_time}`
+                                    : "No hours overlap";
+                                })()}
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div
+                    className="ch-res-block-label"
+                    style={{ marginTop: "0.85rem" }}
+                  >
+                    <IconUser size={12} />
+                    Staff for this {r.kind}
+                  </div>
+                  <label className="ch-res-serviceable">
+                    <input
+                      type="checkbox"
+                      checked={staffPickerEnabled}
+                      disabled={saving}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setStaffPickerRoomIds((current) => {
+                          const next = new Set(current);
+                          if (enabled) next.add(r.id);
+                          else next.delete(r.id);
+                          return next;
+                        });
+                        if (!enabled && staffHere.size > 0) {
+                          void patchResource(r.id, { linked_ids: [] });
+                        }
+                      }}
+                      style={{ accentColor: "var(--chaster-accent)" }}
+                    />
+                    <span>
+                      <span className="ch-res-serviceable-title">
+                        Assign specific staff (optional)
+                      </span>
+                      <span className="ch-res-serviceable-hint">
+                        Leave this off if this {r.kind} is not tied to a
+                        particular team member.
+                      </span>
+                    </span>
+                  </label>
+                  {!staffPickerEnabled ? (
+                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
+                      No staff member is required for this {r.kind}.
+                    </p>
+                  ) : allStaff.length === 0 ? (
+                    <p className="ch-res-help" style={{ marginBottom: 0 }}>
+                      No team members yet — add them under Team first.
+                    </p>
+                  ) : (
+                    <div className="ch-res-links">
+                      {allStaff.map((person) => {
+                        const checked = staffHere.has(person.id);
+                        return (
+                          <label
+                            key={person.id}
+                            className={`ch-res-link${checked ? " is-on" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={saving}
+                              onChange={(e) =>
+                                void toggleStaffInRoom(
+                                  person.id,
+                                  e.target.checked,
+                                )
+                              }
+                            />
+                            <span
+                              className="ch-res-link-mark"
+                              aria-hidden
+                            >
+                              <KindMark kind={person.kind} />
+                            </span>
+                            <span className="ch-res-link-text">
+                              <span className="ch-res-link-name">
+                                {person.name}
+                              </span>
+                              <span className="ch-res-link-kind">
+                                Team member
+                              </span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </section>
         )}
 
         <section className="ch-res-block">
-          <div className="ch-res-block-label">
-            <IconClock size={12} />
-            When available
-            <span>
-              blank = store ({s.open_time}–{s.close_time})
-            </span>
-          </div>
-          <div className="ch-res-hours">
-            <input
-              type="time"
-              className="ch-input ch-res-time"
-              defaultValue={r.open_time ?? ""}
-              disabled={saving}
-              aria-label="Opens"
-              onBlur={(e) => {
-                const v = e.target.value.trim() || null;
-                if (v !== (r.open_time ?? null)) {
-                  void patchResource(r.id, { open_time: v });
-                }
-              }}
-            />
-            <span className="ch-res-hours-sep">–</span>
-            <input
-              type="time"
-              className="ch-input ch-res-time"
-              defaultValue={r.close_time ?? ""}
-              disabled={saving}
-              aria-label="Closes"
-              onBlur={(e) => {
-                const v = e.target.value.trim() || null;
-                if (v !== (r.close_time ?? null)) {
-                  void patchResource(r.id, { close_time: v });
-                }
-              }}
-            />
-          </div>
-          <div className="ch-res-block-label mt-3">
-            <IconCalendar size={12} />
-            Open days
-            <button
-              type="button"
-              className="ch-btn ch-btn-text h-6 px-1.5 text-[11px]"
-              disabled={saving || !customDays}
-              onClick={() => void patchResource(r.id, { open_days: null })}
-            >
-              {customDays ? "Use store days" : "Using store days"}
-            </button>
-          </div>
-          <div className="ch-res-days" role="group" aria-label="Open days">
-            {WEEKDAY_ORDER.map((day) => {
-              const on = effectiveDays.includes(day);
-              return (
-                <button
-                  key={day}
-                  type="button"
+          {r.kind === "service" && linkedProviders.length > 0 ? (
+            <>
+              <div className="ch-res-block-label">
+                <IconClock size={12} />
+                Combined staff hours
+                <span>calculated automatically</span>
+              </div>
+              {combinedStaffWindow ? (
+                <ul className="ch-res-effective-list">
+                  <li>
+                    <span className="ch-res-effective-name">
+                      {combinedStaffWindow.open_time}–
+                      {combinedStaffWindow.close_time}
+                    </span>
+                    <span className="ch-res-effective-hours">
+                      {combinedStaffWindow.open_days
+                        .map(weekdayLabel)
+                        .join(" · ")}
+                    </span>
+                  </li>
+                </ul>
+              ) : (
+                <p className="ch-res-help">
+                  The assigned staff do not currently have valid working hours.
+                </p>
+              )}
+              <p className="ch-res-empty-hint">
+                Starts at the earliest assigned staff time and ends at the
+                latest. Actual slots still require at least one assigned team
+                member to be working and free.
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="ch-res-block-label">
+                <IconClock size={12} />
+                When available
+                <span>
+                  blank = store ({s.open_time}–{s.close_time})
+                </span>
+              </div>
+              <div className="ch-res-hours">
+                <input
+                  type="time"
+                  className="ch-input ch-res-time"
+                  defaultValue={r.open_time ?? ""}
                   disabled={saving}
-                  className={`ch-res-day${on ? " is-on" : ""}`}
-                  aria-pressed={on}
-                  onClick={() => {
-                    const base = customDays
-                      ? [...(r.open_days ?? [])]
-                      : [...s.open_days];
-                    const next = on
-                      ? base.filter((d) => d !== day)
-                      : [...base, day];
-                    if (next.length === 0) return;
-                    void patchResource(r.id, { open_days: next });
+                  aria-label="Opens"
+                  onBlur={(e) => {
+                    const v = e.target.value.trim() || null;
+                    if (v !== (r.open_time ?? null)) {
+                      void patchResource(r.id, { open_time: v });
+                    }
                   }}
+                />
+                <span className="ch-res-hours-sep">–</span>
+                <input
+                  type="time"
+                  className="ch-input ch-res-time"
+                  defaultValue={r.close_time ?? ""}
+                  disabled={saving}
+                  aria-label="Closes"
+                  onBlur={(e) => {
+                    const v = e.target.value.trim() || null;
+                    if (v !== (r.close_time ?? null)) {
+                      void patchResource(r.id, { close_time: v });
+                    }
+                  }}
+                />
+              </div>
+              <div className="ch-res-block-label mt-3">
+                <IconCalendar size={12} />
+                Open days
+                <button
+                  type="button"
+                  className="ch-btn ch-btn-text h-6 px-1.5 text-[11px]"
+                  disabled={saving || !customDays}
+                  onClick={() =>
+                    void patchResource(r.id, { open_days: null })
+                  }
                 >
-                  {weekdayLabel(day)}
+                  {customDays ? "Use store days" : "Using store days"}
                 </button>
-              );
-            })}
-          </div>
+              </div>
+              <div className="ch-res-days" role="group" aria-label="Open days">
+                {WEEKDAY_ORDER.map((day) => {
+                  const on = effectiveDays.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      disabled={saving}
+                      className={`ch-res-day${on ? " is-on" : ""}`}
+                      aria-pressed={on}
+                      onClick={() => {
+                        const base = customDays
+                          ? [...(r.open_days ?? [])]
+                          : [...s.open_days];
+                        const next = on
+                          ? base.filter((d) => d !== day)
+                          : [...base, day];
+                        if (next.length === 0) return;
+                        void patchResource(r.id, { open_days: next });
+                      }}
+                    >
+                      {weekdayLabel(day)}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </section>
 
         {tab === "catalog" ? (

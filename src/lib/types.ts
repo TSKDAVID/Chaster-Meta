@@ -87,6 +87,11 @@ export type BookableResource = {
   open_days: WeekdayKey[] | null;
   /** Linked capacity units (e.g. staff under a service). */
   linked_ids: string[];
+  /**
+   * Non-staff units (room / equipment / other) must opt in before they can
+   * be linked as capacity under a service. Staff default to true.
+   */
+  serviceable: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -97,6 +102,7 @@ export type ResourceSummary = {
   name: string;
   kind: ResourceKind;
   linked_ids?: string[];
+  serviceable?: boolean;
 };
 
 export type Booking = {

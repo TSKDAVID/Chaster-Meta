@@ -3,6 +3,9 @@ import {
   normalizeOpenDays,
   normalizeOptionalOpenDays,
 } from "@/lib/bookings";
+export {
+  effectiveWindowForPair,
+} from "@/lib/resource-hours";
 import type { BookableResource, ResourceKind, ResourceSummary, WeekdayKey } from "@/lib/types";
 
 function normalizeKind(value: unknown): ResourceKind {
@@ -22,11 +25,12 @@ export function normalizeResource(
   row: Partial<BookableResource> & { id: string; page_id: string; name: string },
   linkedIds: string[] = [],
 ): BookableResource {
+  const kind = normalizeKind(row.kind);
   return {
     id: row.id,
     page_id: row.page_id,
     name: row.name.trim(),
-    kind: normalizeKind(row.kind),
+    kind,
     active: row.active !== false,
     sort_order: typeof row.sort_order === "number" ? row.sort_order : 0,
     notes: row.notes?.trim() || null,
@@ -34,6 +38,8 @@ export function normalizeResource(
     close_time: row.close_time?.trim() || null,
     open_days: normalizeOptionalOpenDays(row.open_days),
     linked_ids: linkedIds,
+    serviceable:
+      typeof row.serviceable === "boolean" ? row.serviceable : kind === "staff",
     created_at: row.created_at ?? new Date().toISOString(),
     updated_at: row.updated_at ?? new Date().toISOString(),
   };
@@ -45,7 +51,15 @@ export function toResourceSummary(r: BookableResource): ResourceSummary {
     name: r.name,
     kind: r.kind,
     linked_ids: r.linked_ids.length > 0 ? r.linked_ids : undefined,
+    serviceable: r.serviceable || undefined,
   };
+}
+
+/** Only these units can be linked under a service as capacity. */
+export function canProvideService(r: BookableResource): boolean {
+  if (r.kind === "service") return false;
+  if (r.kind === "staff") return r.serviceable !== false;
+  return r.serviceable === true;
 }
 
 async function loadLinkMap(
@@ -166,6 +180,7 @@ export type CreateResourceInput = {
   sort_order?: number;
   active?: boolean;
   linked_ids?: string[];
+  serviceable?: boolean;
 };
 
 export async function createResource(
@@ -188,22 +203,42 @@ export async function createResource(
     sortOrder = (typeof last?.sort_order === "number" ? last.sort_order : -1) + 1;
   }
 
-  const { data, error } = await supabase
+  const serviceableDefault =
+    typeof input.serviceable === "boolean"
+      ? input.serviceable
+      : normalizeKind(input.kind) === "staff";
+  let insertPayload: Record<string, unknown> = {
+    page_id: input.pageId,
+    name,
+    kind: normalizeKind(input.kind),
+    notes: input.notes?.trim() || null,
+    open_time: input.open_time?.trim() || null,
+    close_time: input.close_time?.trim() || null,
+    open_days: normalizeOptionalOpenDays(input.open_days),
+    sort_order: sortOrder,
+    active: input.active !== false,
+    serviceable: serviceableDefault,
+    updated_at: new Date().toISOString(),
+  };
+
+  let { data, error } = await supabase
     .from("messenger_resources")
-    .insert({
-      page_id: input.pageId,
-      name,
-      kind: normalizeKind(input.kind),
-      notes: input.notes?.trim() || null,
-      open_time: input.open_time?.trim() || null,
-      close_time: input.close_time?.trim() || null,
-      open_days: normalizeOptionalOpenDays(input.open_days),
-      sort_order: sortOrder,
-      active: input.active !== false,
-      updated_at: new Date().toISOString(),
-    })
+    .insert(insertPayload)
     .select("*")
     .maybeSingle();
+
+  if (error && error.message.includes("serviceable")) {
+    // Migration schema-resource-serviceable.sql not applied yet — retry
+    // without the new column so old DBs keep working.
+    const { serviceable: _omit, ...legacyPayload } = insertPayload;
+    const retry = await supabase
+      .from("messenger_resources")
+      .insert(legacyPayload)
+      .select("*")
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error || !data) throw new Error(error?.message ?? "Failed to create resource");
 
@@ -226,6 +261,7 @@ export type UpdateResourceInput = {
   sort_order?: number;
   active?: boolean;
   linked_ids?: string[];
+  serviceable?: boolean;
 };
 
 export async function updateResource(
@@ -252,15 +288,29 @@ export async function updateResource(
   }
   if (input.sort_order !== undefined) patch.sort_order = input.sort_order;
   if (input.active !== undefined) patch.active = input.active;
+  if (input.serviceable !== undefined) patch.serviceable = input.serviceable;
 
   const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from("messenger_resources")
     .update(patch)
     .eq("id", input.id)
     .eq("page_id", input.pageId)
     .select("*")
     .maybeSingle();
+
+  if (error && error.message.includes("serviceable")) {
+    const { serviceable: _omit, ...legacyPatch } = patch;
+    const retry = await supabase
+      .from("messenger_resources")
+      .update(legacyPatch)
+      .eq("id", input.id)
+      .eq("page_id", input.pageId)
+      .select("*")
+      .maybeSingle();
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error || !data) throw new Error(error?.message ?? "Failed to update resource");
 
@@ -293,10 +343,40 @@ export async function setResourceLinks(
 
   if (unique.length > 0) {
     const siblings = await listResources(pageId, { includeInactive: true });
-    const allowed = new Set(siblings.map((r) => r.id));
+    const byId = new Map(siblings.map((r) => [r.id, r]));
     for (const id of unique) {
-      if (!allowed.has(id)) {
+      const child = byId.get(id);
+      if (!child) {
         throw new Error(`Linked resource not found: ${id}`);
+      }
+      if (parent.kind === "service") {
+        if (!canProvideService(child)) {
+          throw new Error(
+            `${child.name} isn't enabled for services. Update its service settings first.`,
+          );
+        }
+        if (child.kind === "service") {
+          throw new Error(
+            `${child.name} is a service and can't be linked under another service.`,
+          );
+        }
+      } else if (
+        parent.kind === "room" ||
+        parent.kind === "equipment" ||
+        parent.kind === "other"
+      ) {
+        // Room-centric membership: rooms hold staff who work there.
+        // Services are connected from the room editor by updating the
+        // SERVICE side, never stored here — so only staff allowed.
+        if (child.kind !== "staff") {
+          throw new Error(
+            `A ${parent.kind} can only hold team members — connect services from the service side (or the room editor's Services list).`,
+          );
+        }
+      } else if (parent.kind === "staff") {
+        throw new Error(
+          `Team members don't hold links — connect them from Services & rooms or a room instead.`,
+        );
       }
     }
   }
@@ -345,9 +425,27 @@ export function capacityUnitsFor(
   resource: BookableResource,
   byId: Map<string, BookableResource>,
 ): BookableResource[] {
-  if (resource.linked_ids.length === 0) return [resource];
-  const children = resource.linked_ids
+  // Only services expand links into providers. Room → staff links are
+  // membership ("who works here"), not booking alternatives — booking a
+  // room books the room itself.
+  if (resource.kind !== "service" || resource.linked_ids.length === 0) {
+    return [resource];
+  }
+  const linkedStaff = resource.linked_ids
     .map((id) => byId.get(id))
-    .filter((r): r is BookableResource => Boolean(r?.active));
-  return children.length > 0 ? children : [resource];
+    .filter(
+      (linked): linked is BookableResource => linked?.kind === "staff",
+    );
+  if (linkedStaff.length === 0) return [resource];
+  return linkedStaff.filter(
+    (staff) => staff.active && canProvideService(staff),
+  );
+}
+
+/** Human summary of the effective window, for desk + empty states. */
+export function describeEffectiveWindow(
+  window: { open_time: string; close_time: string; open_days: WeekdayKey[] } | null,
+): string | null {
+  if (!window) return null;
+  return `${window.open_time}–${window.close_time} · ${window.open_days.join(", ")}`;
 }

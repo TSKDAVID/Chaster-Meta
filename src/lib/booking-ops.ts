@@ -4,8 +4,10 @@ import {
 } from "@/lib/bookings";
 import {
   capacityUnitsFor,
+  effectiveWindowForPair,
   loadActiveResources,
 } from "@/lib/resource-ops";
+import { combinedProviderWindow } from "@/lib/resource-hours";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import type {
   BookableResource,
@@ -137,6 +139,16 @@ function overlaps(
   const b0 = bStart.getTime();
   const b1 = bEnd.getTime();
   return a0 < b1 && b0 < a1;
+}
+
+export function isCapacityConflictError(error: {
+  code?: string | null;
+  message?: string | null;
+} | null): boolean {
+  return (
+    error?.code === "23P01" ||
+    error?.message?.includes("messenger_bookings_no_capacity_overlap") === true
+  );
 }
 
 /**
@@ -437,7 +449,9 @@ async function checkResourceInterval(input: {
 
 /**
  * Resolve primary resource → first free capacity unit.
- * Services with linked staff are free if any linked unit is free.
+ * Services with linked staff are free if any assigned person is working and
+ * free. Rooms and equipment describe where a service can happen; they never
+ * substitute for the staff member who performs it.
  */
 async function findFreeAssignment(input: {
   pageId: string;
@@ -453,7 +467,48 @@ async function findFreeAssignment(input: {
 } | null> {
   const byId = new Map(input.all.map((r) => [r.id, r]));
   const units = capacityUnitsFor(input.primary, byId);
+  const fallback = {
+    open_time: input.settings.open_time,
+    close_time: input.settings.close_time,
+    open_days: input.settings.open_days,
+  };
   for (const unit of units) {
+    const effective =
+      input.primary.id === unit.id
+        ? {
+            open_time: unit.open_time?.trim() || fallback.open_time,
+            close_time: unit.close_time?.trim() || fallback.close_time,
+            open_days:
+              unit.open_days && unit.open_days.length > 0
+                ? unit.open_days
+                : fallback.open_days,
+          }
+        : effectiveWindowForPair({
+            primary: input.primary,
+            capacity: unit,
+            fallback,
+          });
+    if (!effective) continue;
+    if (
+      !isOpenOnDates(
+        effective.open_days,
+        input.starts,
+        input.ends,
+        input.settings.timezone,
+      )
+    ) {
+      continue;
+    }
+    if (
+      !withinHoursFor(
+        input.settings,
+        input.starts,
+        effective.open_time,
+        effective.close_time,
+      )
+    ) {
+      continue;
+    }
     const free = await checkResourceInterval({
       pageId: input.pageId,
       settings: input.settings,
@@ -634,8 +689,8 @@ export async function checkAvailability(input: {
         available: false,
         mode: settings.booking_mode,
         message:
-          resource.linked_ids.length > 0
-            ? `${resource.name} has no free linked resource then.`
+          resource.kind === "service" && resource.linked_ids.length > 0
+            ? `${resource.name} has no assigned staff member who is working and free then.`
             : `${resource.name} is not free then (hours ${hours.open_time}–${hours.close_time}).`,
         requested,
         resource_id: resource.id,
@@ -747,7 +802,23 @@ async function listFreeSlotLabels(
   let openTime = settings.open_time;
   let closeTime = settings.close_time;
   if (scoped.length === 1) {
-    const hours = hoursForResource(settings, scoped[0]);
+    const resource = scoped[0];
+    const byId = new Map(resources.map((item) => [item.id, item]));
+    const capacities = capacityUnitsFor(resource, byId);
+    const combined =
+      resource.kind === "service" &&
+      capacities.some((capacity) => capacity.id !== resource.id)
+        ? combinedProviderWindow({
+            primary: resource,
+            providers: capacities,
+            fallback: {
+              open_time: settings.open_time,
+              close_time: settings.close_time,
+              open_days: settings.open_days,
+            },
+          })
+        : null;
+    const hours = combined ?? hoursForResource(settings, resource);
     openTime = hours.open_time;
     closeTime = hours.close_time;
   }
@@ -1063,7 +1134,12 @@ export async function createAiBooking(input: {
     .maybeSingle();
 
   if (error || !data) {
-    return { ok: false, message: error?.message ?? "Failed to save booking" };
+    return {
+      ok: false,
+      message: isCapacityConflictError(error)
+        ? "That team member was just booked for another service. Please choose another time."
+        : error?.message ?? "Failed to save booking",
+    };
   }
 
   const booking = toSummary(data as Booking, input.settings.timezone, {
@@ -1222,6 +1298,7 @@ export async function updateCustomerBooking(input: {
     if (availability.resource_id) {
       patch.resource_id = availability.resource_id;
     }
+    patch.assigned_resource_id = availability.assigned_resource_id ?? null;
   } else if (input.resourceId !== undefined) {
     patch.resource_id = input.resourceId || null;
   }
@@ -1254,7 +1331,12 @@ export async function updateCustomerBooking(input: {
     .maybeSingle();
 
   if (error || !data) {
-    return { ok: false, message: error?.message ?? "Failed to update booking" };
+    return {
+      ok: false,
+      message: isCapacityConflictError(error)
+        ? "That team member is already booked for another service at this time."
+        : error?.message ?? "Failed to update booking",
+    };
   }
 
   const booking = toSummary(data as Booking, input.settings.timezone);

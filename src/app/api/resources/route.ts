@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
     sort_order?: number;
     active?: boolean;
     linked_ids?: string[];
+    serviceable?: boolean;
   };
   try {
     body = await request.json();
@@ -79,6 +80,8 @@ export async function POST(request: NextRequest) {
       sort_order: body.sort_order,
       active: body.active,
       linked_ids: body.linked_ids,
+      serviceable:
+        typeof body.serviceable === "boolean" ? body.serviceable : undefined,
     });
     return NextResponse.json({ resource });
   } catch (err) {
@@ -101,6 +104,7 @@ export async function PATCH(request: NextRequest) {
     sort_order?: number;
     active?: boolean;
     linked_ids?: string[];
+    serviceable?: boolean;
   };
   try {
     body = await request.json();
@@ -133,6 +137,8 @@ export async function PATCH(request: NextRequest) {
       sort_order: body.sort_order,
       active: body.active,
       linked_ids: body.linked_ids,
+      serviceable:
+        typeof body.serviceable === "boolean" ? body.serviceable : undefined,
     });
     return NextResponse.json({ resource });
   } catch (err) {
