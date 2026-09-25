@@ -5,6 +5,7 @@ import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 export const completeBookingTool: ChasterTool = {
   name: "complete_booking",
   moduleId: "bookings",
+  intents: [],
   definition: {
     type: "function",
     function: {

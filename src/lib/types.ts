@@ -105,6 +105,10 @@ export type ResourceSummary = {
   kind: ResourceKind;
   linked_ids?: string[];
   serviceable?: boolean;
+  /** Own hours; null = inherits the Page booking hours. */
+  open_time?: string | null;
+  close_time?: string | null;
+  open_days?: WeekdayKey[] | null;
 };
 
 export type Booking = {

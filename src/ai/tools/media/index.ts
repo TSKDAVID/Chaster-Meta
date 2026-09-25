@@ -1,8 +1,27 @@
 import { sendPageImageMessage } from "@/lib/meta";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
+import { catalogFields } from "@/ai/modules/catalog";
+import { rankByQuery } from "@/ai/retrieval";
 import type { ChasterTool } from "@/ai/tools/types";
 import { strArg } from "@/ai/tools/_shared";
 import type { ModuleContext } from "@/ai/modules/types";
+import type { CatalogItem } from "@/lib/types";
+
+function itemsWithPhotos(ctx: ModuleContext): CatalogItem[] {
+  return (ctx.catalogItems ?? []).filter((i) => i.active && i.image_url);
+}
+
+function matchCatalogPhoto(
+  ctx: ModuleContext,
+  query: string,
+): { url: string; itemName?: string } | null {
+  const q = query.trim();
+  if (!q) return null;
+  const scored = rankByQuery(itemsWithPhotos(ctx), q, catalogFields).filter((r) => r.score > 0);
+  const item = scored[0]?.item;
+  if (!item?.image_url) return null;
+  return { url: item.image_url, itemName: item.name };
+}
 
 function resolveImageUrl(
   args: Record<string, unknown>,
@@ -10,6 +29,7 @@ function resolveImageUrl(
 ): { url: string; itemName?: string } | { error: string } {
   const catalogId = strArg(args, "catalog_item_id");
   const imageUrl = strArg(args, "image_url");
+  const query = strArg(args, "query");
 
   if (catalogId) {
     const item = ctx.catalogItems?.find((i) => i.id === catalogId);
@@ -21,8 +41,13 @@ function resolveImageUrl(
   }
 
   if (!imageUrl) {
+    if (query) {
+      const matched = matchCatalogPhoto(ctx, query);
+      if (matched) return matched;
+      return { error: `No catalog photo matches “${query}”.` };
+    }
     return {
-      error: "Provide catalog_item_id or image_url from the catalog",
+      error: "Provide catalog_item_id, query (item name), or image_url from the catalog",
     };
   }
 
@@ -44,7 +69,7 @@ function resolveImageUrl(
   if (!fromCatalog && !fromStorage) {
     return {
       error:
-        "Only catalog photos can be sent. Use list_catalog and pass catalog_item_id or that item’s image_url.",
+        "Only catalog photos can be sent. Pass the item's catalog_item_id (use search_catalog to find it).",
     };
   }
 
@@ -57,18 +82,24 @@ function resolveImageUrl(
 export const sendPhotoTool: ChasterTool = {
   name: "send_photo",
   moduleId: "media",
+  intents: ["photo"],
   definition: {
     type: "function",
     function: {
       name: "send_photo",
       description:
-        "Send a catalog photo as a real Messenger image (not a link). Use when the customer asks to see a product/service photo. Prefer catalog_item_id from list_catalog.",
+        "Send a catalog photo with this turn's reply. Call only when the latest message asks to see a picture (or retries). Prefer catalog_item_id; otherwise pass query with the item name (e.g. მესტია). Never paste image links.",
       parameters: {
         type: "object",
         properties: {
           catalog_item_id: {
             type: "string",
-            description: "Catalog item id that has an image_url",
+            description: "Catalog item id (the item must be marked \"has photo\")",
+          },
+          query: {
+            type: "string",
+            description:
+              "Item name to find a photo for, if you do not have catalog_item_id (e.g. მესტია, Tobavarchkhili)",
           },
           image_url: {
             type: "string",
@@ -93,17 +124,37 @@ export const sendPhotoTool: ChasterTool = {
       return { ok: false, message: resolved.error };
     }
 
-    const result = await sendPageImageMessage(
-      token,
-      ctx.peerId,
-      resolved.url,
-    );
+    ctx.pendingPhotos ??= [];
+    if (ctx.pendingPhotos.some((p) => p.url === resolved.url)) {
+      return {
+        ok: true,
+        queued: true,
+        item_name: resolved.itemName ?? null,
+        note: "Same photo is already attached to this reply. Write one short line about what they are looking at. Do not say it was already sent.",
+      };
+    }
+    ctx.pendingPhotos.push({ url: resolved.url, itemName: resolved.itemName });
 
-    const supabase = getSupabaseAdmin();
-    const label = resolved.itemName
-      ? `📷 ${resolved.itemName}`
-      : "📷 Photo";
+    return {
+      ok: true,
+      queued: true,
+      item_name: resolved.itemName ?? null,
+      note: "The photo is attached to THIS reply, after your text. Write one short line about what they are looking at. Never say the photo was already sent.",
+    };
+  },
+};
 
+export async function deliverQueuedPhotos(
+  ctx: ModuleContext,
+  photos: Array<{ url: string; itemName?: string }>,
+) {
+  const token = ctx.pageAccessToken?.trim();
+  if (!token || photos.length === 0) return;
+
+  const supabase = getSupabaseAdmin();
+  for (const photo of photos) {
+    const result = await sendPageImageMessage(token, ctx.peerId, photo.url);
+    const label = photo.itemName ? `📷 ${photo.itemName}` : "📷 Photo";
     await supabase.from("messenger_messages").upsert(
       {
         page_id: ctx.pageId,
@@ -115,22 +166,27 @@ export const sendPhotoTool: ChasterTool = {
         platform: ctx.platform ?? "messenger",
         raw_payload: {
           source: "groq_send_photo",
-          image_url: resolved.url,
-          item_name: resolved.itemName ?? null,
+          image_url: photo.url,
+          item_name: photo.itemName ?? null,
           result,
         },
       },
       { onConflict: "mid", ignoreDuplicates: true },
     );
+  }
+}
 
-    return {
-      ok: true,
-      sent: true,
-      message_id: result.message_id ?? null,
-      item_name: resolved.itemName ?? null,
-      note: "Photo delivered in chat. Follow up with a short text reply — do not paste the URL.",
-    };
-  },
-};
+/** If the model skipped send_photo, queue the best catalog match for this request. */
+export function queueMatchingPhotos(ctx: ModuleContext, query: string, limit = 2) {
+  const scored = rankByQuery(itemsWithPhotos(ctx), query, catalogFields).filter(
+    (r) => r.score > 0,
+  );
+  ctx.pendingPhotos ??= [];
+  for (const { item } of scored.slice(0, limit)) {
+    if (!item.image_url) continue;
+    if (ctx.pendingPhotos.some((p) => p.url === item.image_url)) continue;
+    ctx.pendingPhotos.push({ url: item.image_url, itemName: item.name });
+  }
+}
 
 export const MEDIA_TOOLS: ChasterTool[] = [sendPhotoTool];

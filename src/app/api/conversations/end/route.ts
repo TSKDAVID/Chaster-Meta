@@ -90,6 +90,10 @@ export async function POST(request: NextRequest) {
       last_summary: aiResult.summary,
       ended_at: now,
       updated_at: now,
+      // The next conversation starts with a clean AI memory.
+      ai_memory: null,
+      ai_state: null,
+      ai_memory_updated_at: null,
     },
     { onConflict: "page_id,peer_id" },
   );

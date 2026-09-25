@@ -1,3 +1,4 @@
+import { BOOKING_INTENTS } from "@/ai/intents";
 import type { ChasterModule } from "@/ai/modules/types";
 import { bookingsPromptSection } from "./prompt";
 
@@ -9,6 +10,7 @@ export const bookingsModule: ChasterModule = {
   id: "bookings",
   label: "Bookings",
   description: "Appointment availability, ledger, and AI booking tools.",
+  intents: BOOKING_INTENTS,
   isActive: (ctx) => Boolean(ctx.bookingSettings),
   systemPromptSection: bookingsPromptSection,
 };

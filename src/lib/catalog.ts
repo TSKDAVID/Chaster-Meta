@@ -424,36 +424,49 @@ export async function uploadCatalogImage(input: {
   return data.publicUrl;
 }
 
-export function catalogPromptSection(items: CatalogItem[]): string | null {
+const DESCRIPTION_LIMIT = 160;
+
+/** One compact line per item for the AI prompt / search results. */
+export function formatCatalogLine(item: CatalogItem): string {
+  const bits = [`- ${item.name} — ${formatCatalogPrice(item)}`];
+  if (item.variants.length) {
+    bits.push(
+      `(options: ${item.variants
+        .map((v) => `${v.name} ${formatMoney(v.price, item.currency, v.unit)}`)
+        .join("; ")})`,
+    );
+  }
+  bits.push(`· ${availabilityLabel(item.availability)} · stock: ${formatCatalogStock(item)}`);
+  if (item.category) bits.push(`· ${item.category}`);
+  if (item.tags.length) bits.push(`· tags: ${item.tags.join(", ")}`);
+  if (item.image_url) bits.push("· has photo");
+  bits.push(`· id: ${item.id}`);
+  let line = bits.join(" ");
+  if (item.description) {
+    const desc =
+      item.description.length > DESCRIPTION_LIMIT
+        ? `${item.description.slice(0, DESCRIPTION_LIMIT).trimEnd()}…`
+        : item.description;
+    line += `\n  ${desc}`;
+  }
+  return line;
+}
+
+export function catalogPromptSection(
+  items: CatalogItem[],
+  opts: { total?: number; truncated?: boolean } = {},
+): string | null {
   const active = items.filter((i) => i.active);
   if (active.length === 0) return null;
 
-  const lines = active.slice(0, 40).map((item, index) => {
-    const bits = [
-      `${index + 1}. ${item.name} — ${formatCatalogPrice(item)} [${availabilityLabel(item.availability)}]`,
-    ];
-    if (item.category) bits.push(`(${item.category})`);
-    if (item.tags.length) bits.push(`tags: ${item.tags.join(", ")}`);
-    if (item.description) bits.push(`\n   ${item.description}`);
-    if (item.variants.length) {
-      const vLines = item.variants
-        .map(
-          (v) =>
-            `   · ${v.name}: ${formatMoney(v.price, item.currency, v.unit)}`,
-        )
-        .join("\n");
-      bits.push(`\n${vLines}`);
-    }
-    bits.push(`stock: ${formatCatalogStock(item)}`);
-    if (item.image_url) bits.push(`\n   photo: ${item.image_url}`);
-    return bits.join(" ");
-  });
+  const scope = opts.truncated
+    ? `Showing the ${active.length} most relevant of ${opts.total ?? active.length} items. If the customer asks about something not listed, call search_catalog before saying you don't have it.`
+    : "This is the full catalog.";
 
   return `## Catalog / price list
-Use these items when customers ask about products, services, or prices. Do not invent prices.
-Respect availability: in_stock = available, seasonal = only in season, ask = confirm with the team before promising.
-If stock is Unlimited (typical for services), do not claim a limited quantity. If stock is a number, be honest about remaining units; if Out of stock, say so.
-If an item has variants, quote those prices. Mention tags when relevant (e.g. vegan, kids).
-Items may list a photo URL for your reference only — to show the customer the picture, call send_photo (never paste the URL as a link).
-${lines.join("\n")}`;
+${scope}
+Quote prices exactly as written here, in the same currency. Never invent prices or items.
+Availability: In stock = available, Seasonal = only in season, Ask first = confirm with the team before promising.
+Stock "Unlimited" (typical for services) means no quantity limit; a number means units left; "Out of stock" means say so honestly.
+${active.map(formatCatalogLine).join("\n")}`;
 }

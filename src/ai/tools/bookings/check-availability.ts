@@ -5,6 +5,7 @@ import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 export const checkAvailabilityTool: ChasterTool = {
   name: "check_availability",
   moduleId: "bookings",
+  intents: ["availability", "booking_new", "booking_change"],
   definition: {
     type: "function",
     function: {

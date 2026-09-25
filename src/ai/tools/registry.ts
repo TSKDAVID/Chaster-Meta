@@ -1,6 +1,8 @@
+import { intentsMatch } from "@/ai/intents";
 import { BOOKING_TOOLS } from "@/ai/tools/bookings";
 import { CATALOG_TOOLS } from "@/ai/tools/catalog";
 import { HOURS_TOOLS } from "@/ai/tools/hours";
+import { KNOWLEDGE_TOOLS } from "@/ai/tools/knowledge";
 import { MEDIA_TOOLS } from "@/ai/tools/media";
 import { RESOURCE_TOOLS } from "@/ai/tools/resources";
 import type { AiToolDefinition, ChasterTool } from "@/ai/tools/types";
@@ -18,6 +20,7 @@ export const ALL_TOOLS: ChasterTool[] = [
   ...MEDIA_TOOLS,
   ...HOURS_TOOLS,
   ...CATALOG_TOOLS,
+  ...KNOWLEDGE_TOOLS,
 ];
 
 const BY_NAME = new Map(ALL_TOOLS.map((t) => [t.name, t]));
@@ -26,13 +29,14 @@ export function getTool(name: string): ChasterTool | undefined {
   return BY_NAME.get(name);
 }
 
-/** Tools the LLM may call for this turn (module entitled + tool gate). */
+/** Tools the LLM may call for this turn (module entitled + routed intent + tool gate). */
 export function collectToolsForContext(ctx: ModuleContext): AiToolDefinition[] {
   const out: AiToolDefinition[] = [];
   const seen = new Set<string>();
 
   for (const tool of ALL_TOOLS) {
     if (!isModuleEntitled(ctx.entitlements, tool.moduleId)) continue;
+    if (!intentsMatch(tool.intents, ctx.intents)) continue;
     if (tool.isAvailable && !tool.isAvailable(ctx)) continue;
     if (seen.has(tool.name)) {
       console.warn(`[tools] duplicate tool name skipped: ${tool.name}`);

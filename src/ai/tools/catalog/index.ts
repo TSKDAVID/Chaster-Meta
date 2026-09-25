@@ -1,79 +1,60 @@
-import {
-  availabilityLabel,
-  formatCatalogPrice,
-  formatCatalogStock,
-  listCatalogItems,
-} from "@/lib/catalog";
+import { formatCatalogLine, listCatalogItems } from "@/lib/catalog";
+import { rankByQuery } from "@/ai/retrieval";
+import { catalogFields } from "@/ai/modules/catalog";
 import type { ChasterTool } from "@/ai/tools/types";
 import { strArg } from "@/ai/tools/_shared";
 
-export const listCatalogTool: ChasterTool = {
-  name: "list_catalog",
+const RESULT_LIMIT = 10;
+
+export const searchCatalogTool: ChasterTool = {
+  name: "search_catalog",
   moduleId: "catalog",
+  intents: ["catalog"],
   definition: {
     type: "function",
     function: {
-      name: "list_catalog",
+      name: "search_catalog",
       description:
-        "List active catalog items with prices, variants, tags, stock, and availability. Use for menu, products, services, or price questions. If an item has image_url and the customer wants to see it, call send_photo with catalog_item_id.",
+        "Search the catalog (products, services, prices, options, stock). Use when the item the customer asks about is not in the catalog section of your instructions. Try the customer's words and an English/Georgian synonym if the first search finds nothing.",
       parameters: {
         type: "object",
         properties: {
           query: {
             type: "string",
-            description:
-              "Optional filter matching name, category, description, or tags",
+            description: "Words to match against item names, categories, tags, descriptions",
           },
         },
-        required: [],
+        required: ["query"],
       },
     },
   },
-  isAvailable: (ctx) => (ctx.catalogItems?.length ?? 0) > 0 || Boolean(ctx.pageId),
+  isAvailable: (ctx) => (ctx.catalogItems?.length ?? 0) > 0,
   async run(args, ctx) {
     const items =
       ctx.catalogItems && ctx.catalogItems.length > 0
         ? ctx.catalogItems.filter((i) => i.active)
         : await listCatalogItems(ctx.pageId);
 
-    const q = (strArg(args, "query") || "").toLowerCase();
-    const filtered = q
-      ? items.filter(
-          (i) =>
-            i.name.toLowerCase().includes(q) ||
-            (i.category?.toLowerCase().includes(q) ?? false) ||
-            (i.description?.toLowerCase().includes(q) ?? false) ||
-            i.tags.some((t) => t.includes(q)),
-        )
-      : items;
+    const query = strArg(args, "query") || "";
+    const matches = rankByQuery(items, query, catalogFields)
+      .filter((r) => r.score > 0)
+      .slice(0, RESULT_LIMIT)
+      .map((r) => r.item);
+
+    if (matches.length === 0) {
+      return {
+        ok: true,
+        count: 0,
+        message: "No catalog item matches. Do not invent one; say it isn't listed or offer to check with the team.",
+      };
+    }
 
     return {
       ok: true,
-      count: filtered.length,
-      items: filtered.slice(0, 30).map((i) => ({
-        id: i.id,
-        name: i.name,
-        price_label: formatCatalogPrice(i),
-        price: i.price,
-        currency: i.currency,
-        unit: i.unit,
-        category: i.category,
-        description: i.description,
-        availability: i.availability,
-        availability_label: availabilityLabel(i.availability),
-        stock_unlimited: i.stock_unlimited,
-        stock_qty: i.stock_unlimited ? null : i.stock_qty,
-        stock_label: formatCatalogStock(i),
-        tags: i.tags,
-        variants: i.variants.map((v) => ({
-          name: v.name,
-          price: v.price,
-          unit: v.unit,
-        })),
-        image_url: i.image_url,
-      })),
+      count: matches.length,
+      items: matches.map(formatCatalogLine),
     };
   },
 };
 
-export const CATALOG_TOOLS: ChasterTool[] = [listCatalogTool];
+export const CATALOG_TOOLS: ChasterTool[] = [searchCatalogTool];

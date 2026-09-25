@@ -5,12 +5,13 @@ import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 export const createBookingTool: ChasterTool = {
   name: "create_booking",
   moduleId: "bookings",
+  intents: ["booking_new"],
   definition: {
     type: "function",
     function: {
       name: "create_booking",
       description:
-        "Create a confirmed appointment. Only when the customer clearly wants to book.",
+        "Create a NEW confirmed appointment, only after the customer agreed to a specific date, time and service. To change an existing booking use update_booking instead.",
       parameters: {
         type: "object",
         properties: {
@@ -41,7 +42,12 @@ export const createBookingTool: ChasterTool = {
           resource_id: {
             type: "string",
             description:
-              "Optional resource UUID. Omit to assign any free unit automatically.",
+              "Optional resource id (e.g. a specific staff member). Omit to assign any free unit automatically.",
+          },
+          additional: {
+            type: "boolean",
+            description:
+              "true only when the customer explicitly wants an extra appointment besides one they already have for the same service",
           },
         },
         required: ["date"],
@@ -62,6 +68,7 @@ export const createBookingTool: ChasterTool = {
       customer_name: strArg(args, "customer_name") || ctx.customerName?.trim() || null,
       notes: strArg(args, "notes"),
       resourceId: strArg(args, "resource_id"),
+      additional: args.additional === true || args.additional === "true",
     });
   },
 };

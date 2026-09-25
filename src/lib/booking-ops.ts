@@ -1,6 +1,7 @@
 import {
   DEFAULT_BOOKING_SETTINGS,
   normalizeOpenDays,
+  slotStepMinutes,
 } from "@/lib/bookings";
 import {
   capacityUnitsFor,
@@ -827,7 +828,7 @@ async function listFreeSlotLabels(
   const dayEnd = zonedWallTimeToUtc(date, closeTime, settings.timezone);
   if (Number.isNaN(+dayStart) || Number.isNaN(+dayEnd)) return [];
 
-  const step = settings.slot_minutes;
+  const step = slotStepMinutes(settings.slot_minutes);
   const closeMin = close.h * 60 + close.m;
   const free: string[] = [];
 
@@ -1065,7 +1066,52 @@ export type CreateBookingResult = {
   ok: boolean;
   message: string;
   booking?: BookingSummary;
+  /** Set when creation was refused because this booking already covers it. */
+  existing_booking?: BookingSummary;
 };
+
+function normalizeServiceLabel(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isSameService(
+  existing: Booking,
+  label: string | null | undefined,
+  resourceId: string | null | undefined,
+): boolean {
+  const a = normalizeServiceLabel(existing.service_label);
+  const b = normalizeServiceLabel(label);
+  if (a && b) return a === b || a.includes(b) || b.includes(a);
+  if (resourceId) {
+    return existing.resource_id === resourceId || existing.assigned_resource_id === resourceId;
+  }
+  return !a && !b;
+}
+
+/** An upcoming active booking of this customer for the same service, if any. */
+async function findUpcomingSameService(input: {
+  pageId: string;
+  peerId: string;
+  service_label?: string | null;
+  resourceId?: string | null;
+}): Promise<Booking | null> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("messenger_bookings")
+    .select("*")
+    .eq("page_id", input.pageId)
+    .eq("peer_id", input.peerId)
+    .in("status", ["confirmed", "pending"])
+    .gte("starts_at", new Date().toISOString())
+    .order("starts_at", { ascending: true })
+    .limit(20);
+  if (error || !data) return null;
+  return (
+    (data as Booking[]).find((row) =>
+      isSameService(row, input.service_label, input.resourceId),
+    ) ?? null
+  );
+}
 
 export async function createAiBooking(input: {
   pageId: string;
@@ -1079,7 +1125,21 @@ export async function createAiBooking(input: {
   notes?: string | null;
   /** Pin a resource; omit for any-available assignment. */
   resourceId?: string | null;
+  /** Customer explicitly wants another appointment next to an existing one. */
+  additional?: boolean;
 }): Promise<CreateBookingResult> {
+  if (!input.additional) {
+    const existing = await findUpcomingSameService(input);
+    if (existing) {
+      const summary = toSummary(existing, input.settings.timezone);
+      return {
+        ok: false,
+        message: `Not created: this customer already has an upcoming booking for this service (${summary.when}, id ${summary.id}). To move or change it, call update_booking with booking_id ${summary.id}. Only if the customer clearly wants an extra, separate appointment, call create_booking again with additional=true.`,
+        existing_booking: summary,
+      };
+    }
+  }
+
   const availability = await checkAvailability({
     pageId: input.pageId,
     settings: input.settings,
@@ -1221,6 +1281,15 @@ export async function completeCustomerBooking(input: {
   return { ok: true, message: `Marked booking done (${booking.when})`, booking };
 }
 
+function ymdInZone(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(iso));
+}
+
 export async function updateCustomerBooking(input: {
   pageId: string;
   peerId: string;
@@ -1262,12 +1331,15 @@ export async function updateCustomerBooking(input: {
       ? input.resourceId
       : existing.booking.resource_id;
 
-  const wantsReschedule = Boolean(input.date?.trim());
+  const nextDate =
+    input.date?.trim() ||
+    (input.time?.trim() ? ymdInZone(existing.booking.starts_at, input.settings.timezone) : "");
+  const wantsReschedule = Boolean(nextDate && (input.date?.trim() || input.time?.trim()));
   if (wantsReschedule) {
     const availability = await checkAvailability({
       pageId: input.pageId,
       settings: input.settings,
-      date: input.date!.trim(),
+      date: nextDate,
       time: input.time,
       end_date: input.end_date,
       excludeBookingId: input.bookingId,
@@ -1285,7 +1357,7 @@ export async function updateCustomerBooking(input: {
     }
     const range = buildRange(
       input.settings,
-      input.date!.trim(),
+      nextDate,
       input.time,
       input.end_date,
     );
@@ -1357,38 +1429,20 @@ export function bookingRulesForPrompt(settings: BookingSettings) {
         ? "full-day bookings"
         : "multi-day stays (check-in date → check-out date)";
 
-  const today = new Intl.DateTimeFormat("en-CA", {
-    timeZone: settings.timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-
   return `Booking is ENABLED.
-Mode: ${mode}.
-Open hours: ${settings.open_time}–${settings.close_time} (${settings.timezone}).
-Open days: ${settings.open_days.join(", ")}.
+Mode: ${mode}. Start times every ${slotStepMinutes(settings.slot_minutes)} minutes (visit length ${settings.slot_minutes} min), including half hours such as 15:30.
+Page hours: ${settings.open_time}–${settings.close_time}, days: ${settings.open_days.join(", ")} (${settings.timezone}). Staff/services may have their own hours (see resources).
 Buffer between appointments: ${settings.buffer_minutes} minutes.
 Customers can book up to ${settings.max_advance_days} days ahead.
-Today in business timezone: ${today}.
-
-Tools you can use:
-- list_open_slots — show free times on a date (omit resource_id = any free unit)
-- check_availability — verify a specific slot (omit resource_id = any free unit)
-- list_my_bookings — this customer's appointments (use before cancel/edit)
-- get_booking — details for one booking id
-- create_booking — create only after customer confirms intent (omit resource_id = assign any free)
-- update_booking — reschedule and/or change service/notes (needs booking_id)
-- cancel_booking — cancel (needs booking_id)
-- complete_booking — mark finished (needs booking_id)
 
 CRITICAL RULES:
-- NEVER say a time is free unless check_availability/list_open_slots says so.
+- Resolve day names and relative dates ("Monday", "tomorrow", "next week") with the calendar in "Now" above. Never compute weekdays yourself.
+- NEVER say a time is free unless check_availability/list_open_slots says so for that exact date.
 - NEVER say booked/cancelled/updated/rescheduled unless the matching tool returned ok=true.
-- For cancel/edit/reschedule: call list_my_bookings first if you do not already have the booking id, then use that id.
-- Prefer updating the existing booking over creating duplicates.
-- If a slot is taken, offer free_slots from the tool result.
-- Do not pretend you are "checking" and wait — call tools in the same turn.
-- Resolve relative dates like "23rd September" to YYYY-MM-DD using Today above.
+- create_booking only after the customer clearly agreed to a specific date, time and service.
+- If the customer already has a booking (see "Working state" / "Customer's upcoming bookings") and wants another time, staff or service, use update_booking on that booking — do NOT create a second one. Only pass additional=true to create_booking when they explicitly want an extra, separate appointment.
+- For cancel/change without a known booking id: call list_my_bookings first.
+- If a slot is taken, offer the free_slots from the tool result.
+- Call tools in the same turn — never say you are "checking" and stop.
 - You may only manage bookings for this chat's customer.`;
 }

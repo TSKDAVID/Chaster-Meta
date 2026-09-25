@@ -13,6 +13,7 @@ export const hoursModule: ChasterModule = {
   id: "hours",
   label: "Hours & place",
   description: "Business address, contact, and opening hours for AI answers.",
+  intents: ["hours_location", "availability", "booking_new", "other"],
   isActive: (ctx) => Boolean(ctx.pageProfile),
   systemPromptSection: hoursPromptSection,
 };

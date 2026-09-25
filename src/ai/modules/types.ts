@@ -1,4 +1,11 @@
-import type { BookingSettings, CatalogItem, MessagePlatform, PageProfile, ResourceSummary } from "@/lib/types";
+import type { Intent } from "@/ai/intents";
+import type {
+  BookingSettings,
+  CatalogItem,
+  MessagePlatform,
+  PageProfile,
+  ResourceSummary,
+} from "@/lib/types";
 import type { AccountEntitlements } from "./entitlements";
 
 /** Stable ids — used in entitlements, registry, tools.moduleId, billing SKUs. */
@@ -33,6 +40,14 @@ export type ModuleContext = {
   pageProfile?: PageProfile | null;
   /** Active catalog items for priced answers. */
   catalogItems?: CatalogItem[];
+  /** Intents picked by the router; undefined = include everything. */
+  intents?: Intent[];
+  /** Text used to rank FAQ / catalog entries for this turn. */
+  query?: string;
+  /** This customer's upcoming bookings, one line each (booking intents only). */
+  customerBookingLines?: string[];
+  /** Photos queued during the turn; delivered after the text reply. */
+  pendingPhotos?: Array<{ url: string; itemName?: string }>;
 };
 
 /**
@@ -45,6 +60,8 @@ export type ChasterModule = {
   description: string;
   /** Core modules are always part of the product shell. */
   core?: boolean;
+  /** Prompt section only added when the router picks one of these intents. */
+  intents?: Intent[];
   /**
    * Runtime gate beyond subscription (e.g. bookings settings loaded).
    * Entitlement is checked first by the registry.

@@ -1,3 +1,4 @@
+import { intentsMatch } from "@/ai/intents";
 import { bookingsModule } from "@/ai/modules/bookings";
 import { catalogModule } from "@/ai/modules/catalog";
 import { hoursModule } from "@/ai/modules/hours";
@@ -43,6 +44,7 @@ export function resolveActiveModules(ctx: ModuleContext): ChasterModule[] {
 export function collectSystemPromptSections(ctx: ModuleContext): string[] {
   const sections: string[] = [];
   for (const mod of resolveActiveModules(ctx)) {
+    if (!intentsMatch(mod.intents, ctx.intents)) continue;
     const section = mod.systemPromptSection?.(ctx) ?? null;
     if (section?.trim()) sections.push(section.trim());
   }

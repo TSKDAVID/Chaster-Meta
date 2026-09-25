@@ -3,6 +3,7 @@ import type { ChasterTool } from "@/ai/tools/types";
 export const getBusinessHoursTool: ChasterTool = {
   name: "get_business_hours",
   moduleId: "hours",
+  intents: ["hours_location"],
   definition: {
     type: "function",
     function: {
@@ -29,6 +30,7 @@ export const getBusinessHoursTool: ChasterTool = {
 export const getBusinessLocationTool: ChasterTool = {
   name: "get_business_location",
   moduleId: "hours",
+  intents: ["hours_location"],
   definition: {
     type: "function",
     function: {

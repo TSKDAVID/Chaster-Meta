@@ -5,6 +5,7 @@ import { requireBookingSettings } from "@/ai/tools/_shared";
 export const listMyBookingsTool: ChasterTool = {
   name: "list_my_bookings",
   moduleId: "bookings",
+  intents: ["booking_new", "booking_change", "booking_cancel"],
   definition: {
     type: "function",
     function: {

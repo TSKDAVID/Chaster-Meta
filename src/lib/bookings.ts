@@ -209,6 +209,12 @@ function parseHmMinutes(hm: string): number | null {
   return h * 60 + min;
 }
 
+/** How often start times are offered. 60-min visits can still start on the half hour. */
+export function slotStepMinutes(slotMinutes: number): number {
+  if (slotMinutes >= 60) return 30;
+  return Math.max(1, slotMinutes);
+}
+
 /** Local wall-clock hourly starts for a YMD day within open/close. */
 export function hourlySlotStarts(
   ymd: string,
@@ -219,8 +225,9 @@ export function hourlySlotStarts(
   const open = parseHmMinutes(openTime);
   const close = parseHmMinutes(closeTime);
   if (open == null || close == null || slotMinutes < 1 || close <= open) return [];
+  const step = slotStepMinutes(slotMinutes);
   const out: string[] = [];
-  for (let t = open; t + slotMinutes <= close; t += slotMinutes) {
+  for (let t = open; t + slotMinutes <= close; t += step) {
     const hh = Math.floor(t / 60);
     const mm = t % 60;
     out.push(`${ymd}T${pad2(hh)}:${pad2(mm)}`);

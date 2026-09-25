@@ -1,3 +1,4 @@
+import type { Intent } from "@/ai/intents";
 import type { ModuleContext, ModuleId } from "@/ai/modules/types";
 
 /** OpenAI/Groq-compatible tool schema fragment. */
@@ -20,6 +21,8 @@ export type ChasterTool = {
   name: string;
   /** Product module that must be active for this tool to be offered. */
   moduleId: ModuleId;
+  /** Only offered when the router picks one of these intents. */
+  intents: Intent[];
   /** Schema sent to the LLM. */
   definition: AiToolDefinition;
   /**

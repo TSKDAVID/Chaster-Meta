@@ -5,6 +5,7 @@ import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 export const listOpenSlotsTool: ChasterTool = {
   name: "list_open_slots",
   moduleId: "bookings",
+  intents: ["availability", "booking_new", "booking_change"],
   definition: {
     type: "function",
     function: {

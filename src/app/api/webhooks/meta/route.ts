@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { isAiAutoReplyEnabled, runAutoReply } from "@/ai";
 import { resolveAndStoreContact } from "@/lib/contacts";
 import { getMetaConfig } from "@/lib/meta";
@@ -220,22 +220,26 @@ export async function POST(request: NextRequest) {
         typeof message.text === "string" &&
         message.text.trim().length > 0
       ) {
-        try {
-          const outcome = await runAutoReply({
-            pageId,
-            customerId,
-            userText: message.text.trim(),
-            platform,
-          });
-          if (!outcome.sent && outcome.reason) {
-            console.log("chaster-brain skip", outcome.reason, { pageId, customerId });
+        const userText = message.text.trim();
+        // Reply after acknowledging Meta so rate-limit waits don't trigger webhook retries.
+        after(async () => {
+          try {
+            const outcome = await runAutoReply({
+              pageId,
+              customerId,
+              userText,
+              platform,
+            });
+            if (!outcome.sent && outcome.reason) {
+              console.log("chaster-brain skip", outcome.reason, { pageId, customerId });
+            }
+          } catch (err) {
+            console.error(
+              "AI auto-reply failed",
+              err instanceof Error ? err.message : err,
+            );
           }
-        } catch (err) {
-          console.error(
-            "AI auto-reply failed",
-            err instanceof Error ? err.message : err,
-          );
-        }
+        });
       }
     }
   }

@@ -5,12 +5,13 @@ import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 export const updateBookingTool: ChasterTool = {
   name: "update_booking",
   moduleId: "bookings",
+  intents: ["booking_change"],
   definition: {
     type: "function",
     function: {
       name: "update_booking",
       description:
-        "Reschedule and/or edit service/name/notes. Prefer this over creating a duplicate.",
+        "Move or edit an existing booking. To change the time on the same day, pass time (HH:mm) — date is optional. Prefer this over creating a duplicate.",
       parameters: {
         type: "object",
         properties: {

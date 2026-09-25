@@ -53,6 +53,9 @@ export function toResourceSummary(r: BookableResource): ResourceSummary {
     kind: r.kind,
     linked_ids: r.linked_ids.length > 0 ? r.linked_ids : undefined,
     serviceable: r.serviceable || undefined,
+    open_time: r.open_time,
+    close_time: r.close_time,
+    open_days: r.open_days,
   };
 }
 

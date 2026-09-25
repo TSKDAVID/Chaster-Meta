@@ -8,10 +8,12 @@ export const mediaModule: ChasterModule = {
   id: "media",
   label: "Media",
   description: "Upload and send photos (e.g. room shots) via Messenger.",
+  intents: ["photo"],
   isActive: (ctx) => Boolean(ctx.pageAccessToken),
   systemPromptSection: () =>
     `## Photos
-When the customer asks for a photo (or a picture of a catalog item), call send_photo with catalog_item_id from list_catalog.
-Never paste image links in your reply — Messenger must receive a real photo attachment.
-After send_photo succeeds, reply briefly in text (e.g. what they are looking at).`,
+Call send_photo only when the latest message asks to see a picture (or retries a failed photo). Do not send photos for booking/FAQ/other turns just because photos were sent earlier.
+When sending: use catalog_item_id or query=item name (e.g. მესტია). Every item marked "has photo" can be sent — do not say you have no photo without calling the tool first.
+Caption with a short line about what they are looking at — no prices or dates unless they also asked.
+Never paste image links or write [send_photo] as text. Never say the photo was already sent.`,
 };

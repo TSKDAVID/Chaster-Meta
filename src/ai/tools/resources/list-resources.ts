@@ -4,6 +4,7 @@ import type { ChasterTool } from "@/ai/tools/types";
 export const listResourcesTool: ChasterTool = {
   name: "list_resources",
   moduleId: "resources",
+  intents: ["availability", "booking_new", "booking_change"],
   definition: {
     type: "function",
     function: {

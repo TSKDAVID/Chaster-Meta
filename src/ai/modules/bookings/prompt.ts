@@ -13,5 +13,10 @@ export function bookingsPromptSection(ctx: ModuleContext): string | null {
   if (ctx.customerName) {
     section += `\nCustomer name on this chat: ${ctx.customerName}`;
   }
+  if (ctx.customerBookingLines) {
+    section += ctx.customerBookingLines.length
+      ? `\n\nCustomer's upcoming bookings:\n${ctx.customerBookingLines.join("\n")}`
+      : "\n\nCustomer's upcoming bookings: none.";
+  }
   return section;
 }

@@ -15,6 +15,7 @@ import {
   formatMonthTitle,
   formatSlotLabel,
   hourlySlotStarts,
+  slotStepMinutes,
   monthGrid,
   parseYmd,
   toYmd,
@@ -1144,7 +1145,8 @@ export default function BookingDrawer({
   const openMin = parseHmMinutes(dayOpen) ?? 9 * 60;
   const closeMin = parseHmMinutes(dayClose) ?? 18 * 60;
   const spanMin = Math.max(closeMin - openMin, s.slot_minutes);
-  const pxPerMin = SLOT_ROW_PX / Math.max(s.slot_minutes, 1);
+  const stepMin = slotStepMinutes(s.slot_minutes);
+  const pxPerMin = SLOT_ROW_PX / Math.max(stepMin, 1);
   const timelineHeight = Math.round(spanMin * pxPerMin);
   const dayStartMs = new Date(`${selectedYmd}T00:00:00`).getTime();
   const nowOffsetPx =
