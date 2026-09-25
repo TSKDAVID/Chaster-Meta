@@ -14,6 +14,7 @@ type FaqEntry = {
 export type FaqAddRequest = { mode: "qa" | "info"; token: number };
 
 type Props = {
+  pageId: string;
   onError: (message: string | null) => void;
   refreshKey?: number;
   search?: string;
@@ -27,6 +28,7 @@ function firstLine(text: string) {
 }
 
 export default function FaqPanel({
+  pageId,
   onError,
   refreshKey = 0,
   search = "",
@@ -45,7 +47,7 @@ export default function FaqPanel({
   const loadFaqs = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/faqs");
+      const res = await fetch(`/api/faqs?page_id=${encodeURIComponent(pageId)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load FAQs");
       setFaqs(data.faqs ?? []);
@@ -55,11 +57,11 @@ export default function FaqPanel({
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [onError, pageId]);
 
   useEffect(() => {
-    void loadFaqs();
-  }, [loadFaqs, refreshKey]);
+    if (pageId) void loadFaqs();
+  }, [loadFaqs, pageId, refreshKey]);
 
   // Toolbar "Add" is a one-shot request; react to a new token during render.
   const [seenAddToken, setSeenAddToken] = useState(0);
@@ -121,6 +123,7 @@ export default function FaqPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: isNew ? undefined : openId,
+          page_id: pageId,
           entry_type: mode,
           question: mode === "qa" ? question.trim() : undefined,
           content: content.trim(),
@@ -141,9 +144,10 @@ export default function FaqPanel({
     if (!confirm(t("faq.deleteConfirm"))) return;
     setDeletingId(id);
     try {
-      const res = await fetch(`/api/faqs?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(
+        `/api/faqs?id=${encodeURIComponent(id)}&page_id=${encodeURIComponent(pageId)}`,
+        { method: "DELETE" },
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Delete failed");
       if (openId === id) closeEditor();

@@ -8,6 +8,7 @@ import {
   type FaqKnowledgeItem,
 } from "@/ai/groq";
 import { sendPageTextMessage } from "@/lib/meta";
+import { loadPeerThread } from "@/lib/message-thread";
 import { loadPageProfile } from "@/lib/page-profile";
 import { loadActiveResources, toResourceSummary } from "@/lib/resource-ops";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
@@ -47,34 +48,29 @@ async function loadConversationStatus(
 }
 
 async function loadHistory(pageId: string, customerId: string): Promise<ChatTurn[]> {
-  const supabase = getSupabaseAdmin();
-  const { data } = await supabase
-    .from("messenger_messages")
-    .select("direction, message_text, sender_id, recipient_id, created_at")
-    .eq("page_id", pageId)
-    .order("created_at", { ascending: false })
-    .limit(40);
+  const rows = await loadPeerThread<{
+    direction: string;
+    message_text: string | null;
+  }>(pageId, customerId, {
+    columns: "direction, message_text, created_at",
+    limit: 20,
+  }).catch(() => []);
 
-  const thread = (data ?? [])
-    .filter((m) => {
-      if (m.direction === "incoming") return m.sender_id === customerId;
-      return m.recipient_id === customerId;
-    })
-    .reverse()
+  return rows
     .filter((m) => Boolean(m.message_text))
-    .slice(-8);
-
-  return thread.map((m) => ({
-    role: (m.direction === "incoming" ? "user" : "assistant") as "user" | "assistant",
-    content: m.message_text as string,
-  }));
+    .slice(-8)
+    .map((m) => ({
+      role: (m.direction === "incoming" ? "user" : "assistant") as "user" | "assistant",
+      content: m.message_text as string,
+    }));
 }
 
-async function loadKnowledge(): Promise<FaqKnowledgeItem[]> {
+async function loadKnowledge(pageId: string): Promise<FaqKnowledgeItem[]> {
   const supabase = getSupabaseAdmin();
   const { data } = await supabase
     .from("messenger_faqs")
     .select("entry_type, question, content")
+    .eq("page_id", pageId)
     .order("created_at", { ascending: true })
     .limit(50);
 
@@ -131,7 +127,7 @@ export async function loadBrainContext(input: {
         .maybeSingle(),
       loadConversationStatus(input.pageId, input.customerId),
       loadHistory(input.pageId, input.customerId),
-      loadKnowledge(),
+      loadKnowledge(input.pageId),
       loadBookingSettings(input.pageId),
       loadCustomerName(input.pageId, input.customerId),
       loadActiveResources(input.pageId),

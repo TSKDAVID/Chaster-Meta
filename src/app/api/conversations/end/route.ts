@@ -3,24 +3,8 @@ import {
   summarizeChatAndSuggestFaqs,
   type FaqKnowledgeItem,
 } from "@/ai";
+import { isSafeMetaId, loadPeerThread } from "@/lib/message-thread";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
-
-function isSafeMetaId(value: string) {
-  return /^[0-9A-Za-z._-]{1,128}$/.test(value);
-}
-
-function peerIdForMessage(
-  msg: {
-    direction: string;
-    sender_id: string;
-    recipient_id: string;
-  },
-  pageId: string,
-) {
-  if (msg.direction === "incoming") return msg.sender_id;
-  if (msg.recipient_id !== pageId) return msg.recipient_id;
-  return msg.sender_id === pageId ? msg.recipient_id : msg.sender_id;
-}
 
 export async function POST(request: NextRequest) {
   let body: { page_id?: string; peer_id?: string };
@@ -43,20 +27,21 @@ export async function POST(request: NextRequest) {
 
   const supabase = getSupabaseAdmin();
 
-  const { data: messages, error: messagesError } = await supabase
-    .from("messenger_messages")
-    .select("direction, message_text, sender_id, recipient_id, created_at")
-    .eq("page_id", pageId)
-    .order("created_at", { ascending: true })
-    .limit(500);
-
-  if (messagesError) {
-    return NextResponse.json({ error: messagesError.message }, { status: 500 });
+  let thread: { direction: string; message_text: string | null }[];
+  try {
+    thread = (
+      await loadPeerThread<{ direction: string; message_text: string | null }>(
+        pageId,
+        peerId,
+        { columns: "direction, message_text, created_at", limit: 500 },
+      )
+    ).filter((m) => Boolean(m.message_text));
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load messages" },
+      { status: 500 },
+    );
   }
-
-  const thread = (messages ?? []).filter(
-    (m) => peerIdForMessage(m, pageId) === peerId && Boolean(m.message_text),
-  );
 
   if (thread.length === 0) {
     return NextResponse.json(
@@ -75,6 +60,7 @@ export async function POST(request: NextRequest) {
   const { data: faqRows } = await supabase
     .from("messenger_faqs")
     .select("entry_type, question, content")
+    .eq("page_id", pageId)
     .order("created_at", { ascending: true })
     .limit(100);
 

@@ -1,13 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
+function readPageId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const id = value.trim();
+  return /^[0-9A-Za-z._-]{1,128}$/.test(id) ? id : null;
+}
+
 export async function GET(request: NextRequest) {
+  const pageId = readPageId(request.nextUrl.searchParams.get("page_id"));
+  if (!pageId) {
+    return NextResponse.json({ error: "page_id is required" }, { status: 400 });
+  }
   const status = request.nextUrl.searchParams.get("status") ?? "pending";
   const supabase = getSupabaseAdmin();
 
   let query = supabase
     .from("messenger_faq_suggestions")
     .select("*")
+    .eq("page_id", pageId)
     .order("created_at", { ascending: false })
     .limit(100);
 
@@ -26,6 +37,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   let body: {
     id?: string;
+    page_id?: string;
     action?: "approve" | "reject";
     question?: string | null;
     content?: string;
@@ -39,11 +51,12 @@ export async function POST(request: NextRequest) {
   }
 
   const id = body.id?.trim();
+  const pageId = readPageId(body.page_id);
   const action = body.action;
 
-  if (!id || (action !== "approve" && action !== "reject")) {
+  if (!id || !pageId || (action !== "approve" && action !== "reject")) {
     return NextResponse.json(
-      { error: "id and action (approve|reject) are required" },
+      { error: "id, page_id and action (approve|reject) are required" },
       { status: 400 },
     );
   }
@@ -53,6 +66,7 @@ export async function POST(request: NextRequest) {
     .from("messenger_faq_suggestions")
     .select("*")
     .eq("id", id)
+    .eq("page_id", pageId)
     .maybeSingle();
 
   if (loadError || !suggestion) {
@@ -94,6 +108,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { error: insertError } = await supabase.from("messenger_faqs").insert({
+      page_id: pageId,
       entry_type: entryType,
       question: entryType === "qa" ? editedQuestion : null,
       content: editedContent,
@@ -119,6 +134,7 @@ export async function POST(request: NextRequest) {
         : {}),
     })
     .eq("id", id)
+    .eq("page_id", pageId)
     .select("*")
     .single();
 

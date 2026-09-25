@@ -23,12 +23,14 @@ type Draft = {
 };
 
 type Props = {
+  pageId: string;
   onError: (message: string | null) => void;
   onApproved?: () => void;
   refreshKey?: number;
 };
 
 export default function FaqSuggestionsPanel({
+  pageId,
   onError,
   onApproved,
   refreshKey = 0,
@@ -42,7 +44,9 @@ export default function FaqSuggestionsPanel({
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/faq-suggestions?status=pending");
+      const res = await fetch(
+        `/api/faq-suggestions?status=pending&page_id=${encodeURIComponent(pageId)}`,
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load suggestions");
       const list = (data.suggestions ?? []) as Suggestion[];
@@ -64,11 +68,11 @@ export default function FaqSuggestionsPanel({
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [onError, pageId]);
 
   useEffect(() => {
-    void load();
-  }, [load, refreshKey]);
+    if (pageId) void load();
+  }, [load, pageId, refreshKey]);
 
   function updateDraft(id: string, patch: Partial<Draft>) {
     setDrafts((prev) => ({
@@ -98,6 +102,7 @@ export default function FaqSuggestionsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id,
+          page_id: pageId,
           action,
           ...(action === "approve" && draft
             ? {

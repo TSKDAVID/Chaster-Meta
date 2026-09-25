@@ -706,6 +706,7 @@ export default function Dashboard() {
             <div className="ch-desk-page" key="desk-knowledge">
               <KnowledgeDrawer
                 open
+                pageId={selectedPageId}
                 onClose={() => changeDeskView("inbox")}
                 onError={setError}
                 suggestionsKey={suggestionsKey}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBrokenDisplayName, resolveAndStoreContact } from "@/lib/contacts";
+import { isSafeMetaId, loadPeerThread } from "@/lib/message-thread";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import type {
   ConversationStatus,
@@ -12,10 +13,6 @@ function peerIdForMessage(msg: MessengerMessage, pageId: string): string {
   if (msg.direction === "incoming") return msg.sender_id;
   if (msg.recipient_id !== pageId) return msg.recipient_id;
   return msg.sender_id === pageId ? msg.recipient_id : msg.sender_id;
-}
-
-function isSafeMetaId(value: string) {
-  return /^[0-9A-Za-z._-]{1,128}$/.test(value);
 }
 
 function normalizePlatform(value: unknown): MessagePlatform {
@@ -35,6 +32,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "invalid peer_id" }, { status: 400 });
   }
 
+  if (peerId) {
+    try {
+      const thread = await loadPeerThread<MessengerMessage>(pageId, peerId, {
+        limit: 2000,
+      });
+      return NextResponse.json({
+        messages: thread.map((msg) => ({
+          ...msg,
+          platform: normalizePlatform(msg.platform),
+        })),
+      });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Failed to load thread" },
+        { status: 500 },
+      );
+    }
+  }
+
   const supabase = getSupabaseAdmin();
 
   const { data, error } = await supabase
@@ -52,11 +68,6 @@ export async function GET(request: NextRequest) {
     ...msg,
     platform: normalizePlatform(msg.platform),
   }));
-
-  if (peerId) {
-    const thread = messages.filter((msg) => peerIdForMessage(msg, pageId) === peerId);
-    return NextResponse.json({ messages: thread });
-  }
 
   const [{ data: states }, { data: contacts }, { data: page }] = await Promise.all([
     supabase

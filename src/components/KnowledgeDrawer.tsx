@@ -10,6 +10,7 @@ import type { KnowledgeDeskTab } from "@/lib/desk-routes";
 
 type Props = {
   open: boolean;
+  pageId: string;
   onClose?: () => void;
   onError: (message: string | null) => void;
   suggestionsKey: number;
@@ -23,6 +24,7 @@ type Props = {
 
 export default function KnowledgeDrawer({
   open,
+  pageId,
   onClose,
   onError,
   suggestionsKey,
@@ -110,6 +112,7 @@ export default function KnowledgeDrawer({
       <div key={tab} className="ch-page-body">
         {tab === "faq" ? (
           <FaqPanel
+            pageId={pageId}
             onError={onError}
             refreshKey={faqKey}
             search={search}
@@ -117,6 +120,7 @@ export default function KnowledgeDrawer({
           />
         ) : (
           <FaqSuggestionsPanel
+            pageId={pageId}
             onError={onError}
             refreshKey={suggestionsKey}
             onApproved={onApproved}
