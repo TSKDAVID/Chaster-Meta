@@ -4,8 +4,8 @@ import {
   formatCatalogStock,
   listCatalogItems,
 } from "@/lib/catalog";
-import type { ChasterTool } from "@/tools/types";
-import { strArg } from "@/tools/_shared";
+import type { ChasterTool } from "@/ai/tools/types";
+import { strArg } from "@/ai/tools/_shared";
 
 export const listCatalogTool: ChasterTool = {
   name: "list_catalog",

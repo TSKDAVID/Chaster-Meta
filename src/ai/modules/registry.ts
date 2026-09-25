@@ -1,14 +1,14 @@
-import { bookingsModule } from "@/modules/bookings";
-import { catalogModule } from "@/modules/catalog";
-import { hoursModule } from "@/modules/hours";
-import { inboxModule } from "@/modules/inbox";
-import { knowledgeModule } from "@/modules/knowledge";
-import { mediaModule } from "@/modules/media";
-import { resourcesModule } from "@/modules/resources";
+import { bookingsModule } from "@/ai/modules/bookings";
+import { catalogModule } from "@/ai/modules/catalog";
+import { hoursModule } from "@/ai/modules/hours";
+import { inboxModule } from "@/ai/modules/inbox";
+import { knowledgeModule } from "@/ai/modules/knowledge";
+import { mediaModule } from "@/ai/modules/media";
+import { resourcesModule } from "@/ai/modules/resources";
 import {
   collectToolsForContext,
   dispatchTool,
-} from "@/tools/registry";
+} from "@/ai/tools/registry";
 import { isModuleEntitled } from "./entitlements";
 import type { ModuleContext, ModuleId, ChasterModule } from "./types";
 
@@ -49,12 +49,12 @@ export function collectSystemPromptSections(ctx: ModuleContext): string[] {
   return sections;
 }
 
-/** Tools for active modules — delegated to `src/tools`. */
+/** Tools for active modules — delegated to `src/ai/tools`. */
 export function collectAiTools(ctx: ModuleContext) {
   return collectToolsForContext(ctx);
 }
 
-/** Run a tool if its module is active — delegated to `src/tools`. */
+/** Run a tool if its module is active — delegated to `src/ai/tools`. */
 export async function dispatchAiTool(
   name: string,
   argsJson: string,

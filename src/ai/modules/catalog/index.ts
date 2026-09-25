@@ -1,5 +1,5 @@
 import { catalogPromptSection } from "@/lib/catalog";
-import type { ChasterModule, ModuleContext } from "@/modules/types";
+import type { ChasterModule, ModuleContext } from "@/ai/modules/types";
 
 function catalogSystemPrompt(ctx: ModuleContext): string | null {
   return catalogPromptSection(ctx.catalogItems ?? []);

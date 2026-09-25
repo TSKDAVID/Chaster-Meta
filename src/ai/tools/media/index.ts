@@ -1,8 +1,8 @@
 import { sendPageImageMessage } from "@/lib/meta";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
-import type { ChasterTool } from "@/tools/types";
-import { strArg } from "@/tools/_shared";
-import type { ModuleContext } from "@/modules/types";
+import type { ChasterTool } from "@/ai/tools/types";
+import { strArg } from "@/ai/tools/_shared";
+import type { ModuleContext } from "@/ai/modules/types";
 
 function resolveImageUrl(
   args: Record<string, unknown>,

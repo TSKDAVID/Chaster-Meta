@@ -6,7 +6,7 @@ import {
   type BookingToolContext,
   type ChatTurn,
   type FaqKnowledgeItem,
-} from "@/lib/groq";
+} from "@/ai/groq";
 import { sendPageTextMessage } from "@/lib/meta";
 import { loadPageProfile } from "@/lib/page-profile";
 import { loadActiveResources, toResourceSummary } from "@/lib/resource-ops";

@@ -1,4 +1,4 @@
-import type { ModuleContext, ModuleId } from "@/modules/types";
+import type { ModuleContext, ModuleId } from "@/ai/modules/types";
 
 /** OpenAI/Groq-compatible tool schema fragment. */
 export type AiToolDefinition = {
@@ -12,7 +12,7 @@ export type AiToolDefinition = {
 
 /**
  * One AI-callable tool.
- * Lives under `src/tools/` and is linked to a product module via `moduleId`.
+ * Lives under `src/ai/tools/` and is linked to a product module via `moduleId`.
  * The LLM only sees tools whose module is entitled + active.
  */
 export type ChasterTool = {

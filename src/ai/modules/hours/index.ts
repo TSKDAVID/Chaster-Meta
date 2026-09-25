@@ -1,5 +1,5 @@
 import { profilePromptSection } from "@/lib/page-profile";
-import type { ChasterModule, ModuleContext } from "@/modules/types";
+import type { ChasterModule, ModuleContext } from "@/ai/modules/types";
 
 function hoursPromptSection(ctx: ModuleContext): string | null {
   if (!ctx.pageProfile) return null;

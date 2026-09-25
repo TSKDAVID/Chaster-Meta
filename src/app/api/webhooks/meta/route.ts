@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runAutoReply } from "@/lib/chaster-brain";
+import { isAiAutoReplyEnabled, runAutoReply } from "@/ai";
 import { resolveAndStoreContact } from "@/lib/contacts";
-import { isAiAutoReplyEnabled } from "@/lib/groq";
 import { getMetaConfig } from "@/lib/meta";
 import { withSyncedReactionPayload } from "@/lib/message-actions";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";

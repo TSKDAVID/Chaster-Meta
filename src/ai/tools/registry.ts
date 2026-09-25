@@ -1,16 +1,16 @@
-import { BOOKING_TOOLS } from "@/tools/bookings";
-import { CATALOG_TOOLS } from "@/tools/catalog";
-import { HOURS_TOOLS } from "@/tools/hours";
-import { MEDIA_TOOLS } from "@/tools/media";
-import { RESOURCE_TOOLS } from "@/tools/resources";
-import type { AiToolDefinition, ChasterTool } from "@/tools/types";
-import { parseToolArgsJson } from "@/tools/_shared";
-import { isModuleEntitled } from "@/modules/entitlements";
-import type { ModuleContext } from "@/modules/types";
+import { BOOKING_TOOLS } from "@/ai/tools/bookings";
+import { CATALOG_TOOLS } from "@/ai/tools/catalog";
+import { HOURS_TOOLS } from "@/ai/tools/hours";
+import { MEDIA_TOOLS } from "@/ai/tools/media";
+import { RESOURCE_TOOLS } from "@/ai/tools/resources";
+import type { AiToolDefinition, ChasterTool } from "@/ai/tools/types";
+import { parseToolArgsJson } from "@/ai/tools/_shared";
+import { isModuleEntitled } from "@/ai/modules/entitlements";
+import type { ModuleContext } from "@/ai/modules/types";
 
 /**
  * Canonical tool catalog.
- * Add new tool groups here when you create folders under `src/tools/`.
+ * Add new tool groups here when you create folders under `src/ai/tools/`.
  */
 export const ALL_TOOLS: ChasterTool[] = [
   ...BOOKING_TOOLS,

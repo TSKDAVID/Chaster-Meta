@@ -37,7 +37,7 @@ export type ModuleContext = {
 
 /**
  * Product module (subscription feature).
- * AI tools are NOT defined here — they live in `src/tools/` and point at a moduleId.
+ * AI tools are NOT defined here — they live in `src/ai/tools/` and point at a moduleId.
  */
 export type ChasterModule = {
   id: ModuleId;

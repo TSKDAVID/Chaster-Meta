@@ -1,7 +1,7 @@
 /**
  * Product modules for Chaster (subscription features).
  *
- * AI tools are separate: see `src/tools/` — each tool sets `moduleId` so it is
+ * AI tools are separate: see `src/ai/tools/` — each tool sets `moduleId` so it is
  * only offered when that module is entitled + active.
  */
 

@@ -1,6 +1,6 @@
 import { updateCustomerBooking } from "@/lib/booking-ops";
-import type { ChasterTool } from "@/tools/types";
-import { requireBookingSettings, strArg } from "@/tools/_shared";
+import type { ChasterTool } from "@/ai/tools/types";
+import { requireBookingSettings, strArg } from "@/ai/tools/_shared";
 
 export const updateBookingTool: ChasterTool = {
   name: "update_booking",

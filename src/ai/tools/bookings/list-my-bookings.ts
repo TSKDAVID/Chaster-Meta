@@ -1,6 +1,6 @@
 import { listCustomerBookings } from "@/lib/booking-ops";
-import type { ChasterTool } from "@/tools/types";
-import { requireBookingSettings } from "@/tools/_shared";
+import type { ChasterTool } from "@/ai/tools/types";
+import { requireBookingSettings } from "@/ai/tools/_shared";
 
 export const listMyBookingsTool: ChasterTool = {
   name: "list_my_bookings",

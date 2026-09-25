@@ -1,10 +1,10 @@
 /**
  * AI tools live here (one file per tool under a group folder).
  * Each tool declares `moduleId` so it is only offered when that product module
- * is entitled + active (see `src/modules/entitlements.ts`).
+ * is entitled + active (see `src/ai/modules/entitlements.ts`).
  *
- *   src/tools/bookings/list-open-slots.ts  → moduleId: "bookings"
- *   src/tools/media/…                     → moduleId: "media"
+ *   src/ai/tools/bookings/list-open-slots.ts  → moduleId: "bookings"
+ *   src/ai/tools/media/…                     → moduleId: "media"
  */
 
 export type { AiToolDefinition, ChasterTool } from "./types";

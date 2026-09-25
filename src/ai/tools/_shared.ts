@@ -1,4 +1,4 @@
-import type { ModuleContext } from "@/modules/types";
+import type { ModuleContext } from "@/ai/modules/types";
 
 export function parseToolArgsJson(argsJson: string): Record<string, unknown> {
   try {

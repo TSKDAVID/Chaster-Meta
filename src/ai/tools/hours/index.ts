@@ -1,4 +1,4 @@
-import type { ChasterTool } from "@/tools/types";
+import type { ChasterTool } from "@/ai/tools/types";
 
 export const getBusinessHoursTool: ChasterTool = {
   name: "get_business_hours",

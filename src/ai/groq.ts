@@ -4,7 +4,7 @@ import {
   dispatchAiTool,
   getEntitlements,
   type ModuleContext,
-} from "@/modules";
+} from "@/ai/modules";
 import type {
   BookingSettings,
   CatalogItem,

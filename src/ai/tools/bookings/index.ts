@@ -1,4 +1,4 @@
-import type { ChasterTool } from "@/tools/types";
+import type { ChasterTool } from "@/ai/tools/types";
 import { cancelBookingTool } from "./cancel-booking";
 import { checkAvailabilityTool } from "./check-availability";
 import { completeBookingTool } from "./complete-booking";

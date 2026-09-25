@@ -1,4 +1,4 @@
-import type { ChasterModule } from "@/modules/types";
+import type { ChasterModule } from "@/ai/modules/types";
 import { bookingsPromptSection } from "./prompt";
 
 /**

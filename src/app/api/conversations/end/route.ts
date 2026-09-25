@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   summarizeChatAndSuggestFaqs,
   type FaqKnowledgeItem,
-} from "@/lib/groq";
+} from "@/ai";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 function isSafeMetaId(value: string) {

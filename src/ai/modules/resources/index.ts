@@ -1,4 +1,4 @@
-import type { ChasterModule, ModuleContext } from "@/modules/types";
+import type { ChasterModule, ModuleContext } from "@/ai/modules/types";
 
 function resourcesPromptSection(ctx: ModuleContext): string | null {
   const resources = ctx.resources ?? [];

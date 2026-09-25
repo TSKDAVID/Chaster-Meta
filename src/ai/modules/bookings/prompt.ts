@@ -1,5 +1,5 @@
 import { bookingRulesForPrompt } from "@/lib/booking-ops";
-import type { ModuleContext } from "@/modules/types";
+import type { ModuleContext } from "@/ai/modules/types";
 
 export function bookingsPromptSection(ctx: ModuleContext): string | null {
   const settings = ctx.bookingSettings;

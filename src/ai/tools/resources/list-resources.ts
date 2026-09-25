@@ -1,5 +1,5 @@
 import { loadActiveResources, toResourceSummary } from "@/lib/resource-ops";
-import type { ChasterTool } from "@/tools/types";
+import type { ChasterTool } from "@/ai/tools/types";
 
 export const listResourcesTool: ChasterTool = {
   name: "list_resources",
