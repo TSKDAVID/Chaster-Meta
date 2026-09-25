@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  markAiFollowup,
   summarizeChatAndSuggestFaqs,
   type FaqKnowledgeItem,
 } from "@/ai";
@@ -179,6 +180,7 @@ export async function PATCH(request: NextRequest) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  if (status === "human") await markAiFollowup(pageId, peerId, "takeover");
 
   return NextResponse.json({ ok: true, status });
 }

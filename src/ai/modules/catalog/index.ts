@@ -34,9 +34,8 @@ function catalogSystemPrompt(ctx: ModuleContext): string | null {
   const wantsPrices =
     !ctx.intents ||
     ctx.intents.includes("catalog") ||
-    ctx.intents.some((i) =>
-      ["availability", "booking_new", "booking_change", "other"].includes(i),
-    );
+    ctx.intents.some((i) => ["availability", "booking_new", "booking_change"].includes(i)) ||
+    (ctx.intents.includes("other") && !ctx.intents.includes("photo"));
   // Photo-only (or photo+faq without catalog): names + ids for send_photo, no prices/dates.
   if (!wantsPrices && ctx.intents?.includes("photo")) {
     const lines = photoPickLines(selection.items);

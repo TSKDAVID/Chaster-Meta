@@ -1,0 +1,44 @@
+﻿Page 615538428312524: 3 catalog items, 11 cases × 1
+
+  catalog: ტური მესტიაში — 50 GEL / თითო პერსონა
+  catalog: ტური ტობავარჩხილზე — 100 GEL / თითო პერსონა
+  catalog: ტელეფონის შეკეთება — Price on request
+
+PASS  greeting-ka  [greeting]  photos=[]
+      > გამარჯობა
+      < გამარჯობა! როგორ შემიძლია დაგეხმაროთ?
+PASS  greeting-en  [greeting]  photos=[]
+      > hi there!
+      < Hi! How can I help you today?
+PASS  call-me-is-not-photo  [other]  photos=[]
+      > ჩამირეკე ხვალ, გთხოვ
+      < ჩვენ დაგიკავშირდებით ხვალ.
+FAIL  photo-one-en  [photo] guards=caption_fix  photos=[ტური მესტიაში]
+      > can you send me a picture of ტური მესტიაში?
+      < ტური მესტიაში – ლანდშაფტის სურათი
+      ! Georgian in an English reply
+PASS  photo-one-ka  [photo] guards=caption_fix  photos=[ტური მესტიაში]
+      > ტური მესტიაში ფოტო ჩამიგდე
+      < ტურის "მესტია" ლანდშაფტის ფოტო
+PASS  photo-retry  [photo] guards=caption_fix  photos=[ტური მესტიაში]
+      > try again
+      < Here is the photo of ტური მესტიაში
+PASS  no-bleed-hours  [hours_location]  photos=[]
+      > what are your opening hours?
+      < We’re open Monday to Friday, 10:00 – 20:00 (Asia/Tbilisi), and closed on public holidays.
+PASS  no-bleed-reschedule-ka  [booking_change]  photos=[]
+      > ჩემი ჯავშანი გადაიტანე ოთხშაბათს იგივე დროზე
+      < მაპატიეთ, თქვენთვის ჯერ არ გვაქვს არსებული ჯავშანი. თუ გსურთ ახალი ჯავშნის შექმნა ოთხშაბათზე, გთხოვთ, მიუთითოთ დრო.
+FAIL  price-question  [catalog]  photos=[]
+      > how much is ტური მესტიაში?
+      < ტური მესტიაში 50 GEL თითო პერსონა.
+      ! Georgian in an English reply
+FAIL  photo-two-en  [photo] guards=caption_fix  photos=[ტური მესტიაში, ტური ტობავარჩხილზე]
+      > send me photos of ტური მესტიაში and ტური ტობავარჩხილზე
+      < ტური მესტიაში – ლანდშაფტის ნახვა, პანორამული სურათი. / ტური ტობავარჩხილზე – ცოცხალი ბუნება, მთის შორს მდებარე სურათი
+      ! Georgian in an English reply
+PASS  photo-two-ka  [photo] guards=caption_fix,photo_fallback  photos=[ტური მესტიაში, ტური ტობავარჩხილზე]
+      > ტური მესტიაში და ტური ტობავარჩხილზე ფოტოები გამომიგზავნე
+      < ტური მესტიაში – ლანდშაფტის სურათი. /  / ტური ტობავარჩხილზე – ლანდშაფტის სურათი
+
+8/11 passed

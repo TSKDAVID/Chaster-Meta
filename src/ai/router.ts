@@ -1,5 +1,5 @@
 import { callGroq, extractJsonObject, groqSmallModel, type ChatTurn } from "@/ai/groq";
-import { INTENTS, isIntent, looksLikePhotoRetry, messageWantsPhoto, type Intent } from "@/ai/intents";
+import { INTENTS, isIntent, turnWantsPhoto, type Intent } from "@/ai/intents";
 
 export type RouteEntities = {
   service: string | null;
@@ -15,6 +15,8 @@ export type Route = {
   /** Undefined = router failed; every section and tool is offered. */
   intents: Intent[] | undefined;
   entities: RouteEntities;
+  /** Items the customer wants pictures of this turn (their words); [] when no photo ask. */
+  photo_items: string[];
   needs_human: boolean;
   /** "router" or "fallback" — for logs. */
   source: "router" | "fallback";
@@ -36,7 +38,7 @@ const INTENT_HELP: Record<Intent, string> = {
   hours_location: "opening hours, address, directions, contact details",
   availability: "asks which times/days are free",
   booking_new: "wants to book an appointment",
-  booking_change: "wants to move / change an existing appointment (time, day, staff, service)",
+  booking_change: "asks about, moves or changes an existing appointment (when is it, time, day, staff, service)",
   booking_cancel: "wants to cancel an appointment",
   human: "asks for a real person / operator, or is angry and wants escalation",
   other: "anything else",
@@ -54,9 +56,35 @@ function fallbackRoute(userText: string): Route {
     lang: guessLang(userText),
     intents: undefined,
     entities: { ...EMPTY_ENTITIES },
+    photo_items: [],
     needs_human: false,
     source: "fallback",
   };
+}
+
+/**
+ * Photo intent needs an explicit "this message asks for a picture" signal:
+ * the router's language-agnostic `wants_photo` flag, or the keyword hint.
+ * A photo intent without either was carried over from an earlier turn and is dropped.
+ */
+export function finalizeIntents(
+  intents: Intent[],
+  userText: string,
+  history: ChatTurn[],
+  routerWantsPhoto: boolean,
+): Intent[] {
+  const wantsPhoto = routerWantsPhoto || turnWantsPhoto(userText, history);
+  if (wantsPhoto) return intents.includes("photo") ? intents : [...intents, "photo"];
+  const withoutPhoto = intents.filter((i) => i !== "photo");
+  return withoutPhoto.length > 0 ? withoutPhoto : ["other"];
+}
+
+function strList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.trim().slice(0, 80))
+    .slice(0, 6);
 }
 
 function strOrNull(value: unknown): string | null {
@@ -81,13 +109,15 @@ Intents (pick ALL that apply to the LATEST message only; use recent chat only to
 ${INTENTS.map((i) => `- ${i}: ${INTENT_HELP[i]}`).join("\n")}
 
 Rules:
-- photo: ONLY if the latest message asks to see a picture (or is a clear "try again" retry after a photo ask). Do NOT keep photo just because an earlier message asked for photos.
-- catalog: ONLY if they ask about products/prices/options. A photo-only ask is photo, not catalog.
-- A short follow-up like "yes", "the 15:00 one", "with Nika then" continues the previous topic — use the intents of that topic.
+- wants_photo: true ONLY if the latest message itself asks to see a picture/image/video or how something looks (any language), or is a short "try again" right after an unanswered picture request. An earlier photo request does NOT make later messages photo requests.
+- photo_items: when wants_photo is true, the item names they want pictures of, in their own words (resolve "it"/"that one" from the recent chat). Otherwise [].
+- photo intent must match wants_photo.
+- catalog: ONLY if they ask about products/prices/options/stock. A picture-only ask is photo, not catalog.
+- A short follow-up like "yes", "the 15:00 one", "with her then" continues the previous topic — use the intents of that topic.
 
 JSON shape:
-{"lang":"<ISO 639-1 code of the language the customer wrote the latest message in; Georgian (also Latin-letter Georgian) = ka>","intents":["..."],"entities":{"service":null,"staff":null,"date_text":null,"time":null,"product":null},"needs_human":false}
-entities: copy the customer's own words (null when absent). date_text = day/date words exactly as said (e.g. "ორშაბათს", "tomorrow"). time = HH:mm if a time was given.`;
+{"lang":"<ISO 639-1 code of the language of the latest message; Georgian written in Latin letters = ka>","intents":["..."],"wants_photo":false,"photo_items":[],"entities":{"service":null,"staff":null,"date_text":null,"time":null,"product":null},"needs_human":false}
+entities: copy the customer's own words (null when absent). date_text = day/date words exactly as said (e.g. "tomorrow", "ორშაბათს"). time = HH:mm if a time was given.`;
 
   try {
     const choice = await callGroq({
@@ -112,17 +142,13 @@ entities: copy the customer's own words (null when absent). date_text = day/date
       : [];
     if (intents.length === 0) return fallbackRoute(input.userText);
 
-    const recentBlob = `${input.userText}\n${input.history.slice(-4).map((t) => t.content).join("\n")}`;
-    const wantsPhoto =
-      messageWantsPhoto(input.userText) || looksLikePhotoRetry(input.userText, recentBlob);
-    if (!intents.includes("photo") && wantsPhoto) {
-      intents.push("photo");
-    }
-    // Drop stale photo intent carried over from earlier turns.
-    if (intents.includes("photo") && !wantsPhoto) {
-      const filtered = intents.filter((i) => i !== "photo");
-      if (filtered.length > 0) intents.splice(0, intents.length, ...filtered);
-    }
+    const finalIntents = finalizeIntents(
+      intents,
+      input.userText,
+      input.history,
+      parsed.wants_photo === true,
+    );
+    const photoItems = finalIntents.includes("photo") ? strList(parsed.photo_items) : [];
 
     const rawEntities =
       parsed.entities && typeof parsed.entities === "object"
@@ -135,7 +161,7 @@ entities: copy the customer's own words (null when absent). date_text = day/date
 
     return {
       lang,
-      intents,
+      intents: finalIntents,
       entities: {
         service: strOrNull(rawEntities.service),
         staff: strOrNull(rawEntities.staff),
@@ -143,7 +169,8 @@ entities: copy the customer's own words (null when absent). date_text = day/date
         time: strOrNull(rawEntities.time),
         product: strOrNull(rawEntities.product),
       },
-      needs_human: parsed.needs_human === true || intents.includes("human"),
+      photo_items: photoItems,
+      needs_human: parsed.needs_human === true || finalIntents.includes("human"),
       source: "router",
     };
   } catch (err) {

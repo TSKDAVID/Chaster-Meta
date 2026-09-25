@@ -11,6 +11,9 @@ export function toMessengerText(text: string): string {
     )
     .replace(/^\s*\[?(?:send_photo|search_catalog|list_open_slots|check_availability|create_booking|update_booking|cancel_booking|search_faq)\]?\s*(\([\s\S]*\))?\.?\s*$/gim, "")
     .replace(/\[send_photo\]/gi, "")
+    // Photo markers belong to our stored photo rows, not the model's text.
+    .replace(/📷\uFE0F?/gu, "")
+    .replace(/^[ \t]+$/gm, "")
     .replace(/\*\*([\s\S]+?)\*\*/g, "$1")
     .replace(/__([\s\S]+?)__/g, "$1")
     .replace(/`([^`\n]+)`/g, "$1")
@@ -24,13 +27,22 @@ export function toMessengerText(text: string): string {
 const ALREADY_SENT =
   /(?:ფოტო|სურათი|photo|picture|image)?\s*უკვე\s*(?:გამოგზავნილ(?:ია|ი)|გამოვგზავნ(?:ე|ილია)|გაგზავნილ(?:ია|ი))|(?:already\s+(?:sent|delivered|attached)|photo (?:is|was) already)/gi;
 
-/** Drop "already sent" wording when a photo is actually going out with this reply. */
+const NO_PHOTO =
+  /(?:ფოტო|სურათ)\S*\s+(?:\S+\s+){0,3}(?:არ\s+(?:გვაქვს|მაქვს|არის|მოიძებნა)|ვერ\s+(?:ვიპოვე|მოიძებნა|გამოგიგზავნ))|(?:no|don't have (?:a|any)?|do not have (?:a|any)?|couldn't find (?:a|any)?)\s*(?:photos?|pictures?|images?)/i;
+
+/**
+ * Drop "already sent" wording when a photo is actually going out with this reply.
+ * Also drops sentences claiming there is no photo when one is going out anyway.
+ */
 export function captionWithPhotos(
   text: string,
   photos: Array<{ itemName?: string }>,
 ): string {
   if (photos.length === 0) return text;
   const stripped = text
+    .split(/(?<=[.!?\n])/)
+    .filter((sentence) => !NO_PHOTO.test(sentence))
+    .join("")
     .replace(ALREADY_SENT, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")

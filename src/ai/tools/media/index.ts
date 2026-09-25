@@ -1,6 +1,7 @@
 import { sendPageImageMessage } from "@/lib/meta";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { catalogFields } from "@/ai/modules/catalog";
+import { matchRequestedPhotos } from "@/ai/photo-match";
 import { rankByQuery } from "@/ai/retrieval";
 import type { ChasterTool } from "@/ai/tools/types";
 import { strArg } from "@/ai/tools/_shared";
@@ -17,8 +18,9 @@ function matchCatalogPhoto(
 ): { url: string; itemName?: string } | null {
   const q = query.trim();
   if (!q) return null;
-  const scored = rankByQuery(itemsWithPhotos(ctx), q, catalogFields).filter((r) => r.score > 0);
-  const item = scored[0]?.item;
+  const item =
+    matchRequestedPhotos(itemsWithPhotos(ctx), q)[0] ??
+    rankByQuery(itemsWithPhotos(ctx), q, catalogFields).filter((r) => r.score > 0)[0]?.item;
   if (!item?.image_url) return null;
   return { url: item.image_url, itemName: item.name };
 }
@@ -88,7 +90,7 @@ export const sendPhotoTool: ChasterTool = {
     function: {
       name: "send_photo",
       description:
-        "Send a catalog photo with this turn's reply. Call only when the latest message asks to see a picture (or retries). Prefer catalog_item_id; otherwise pass query with the item name (e.g. მესტია). Never paste image links.",
+        "Send a catalog photo with this turn's reply. Call only when the latest message asks to see a picture (or retries). Call once per item they asked about. Prefer catalog_item_id; otherwise pass query with the item name. Never paste image links.",
       parameters: {
         type: "object",
         properties: {
@@ -99,7 +101,7 @@ export const sendPhotoTool: ChasterTool = {
           query: {
             type: "string",
             description:
-              "Item name to find a photo for, if you do not have catalog_item_id (e.g. მესტია, Tobavarchkhili)",
+              "Item name to find a photo for, if you do not have catalog_item_id",
           },
           image_url: {
             type: "string",
@@ -147,13 +149,23 @@ export const sendPhotoTool: ChasterTool = {
 export async function deliverQueuedPhotos(
   ctx: ModuleContext,
   photos: Array<{ url: string; itemName?: string }>,
-) {
+): Promise<{ sent: number; failed: number }> {
   const token = ctx.pageAccessToken?.trim();
-  if (!token || photos.length === 0) return;
+  if (!token || photos.length === 0) return { sent: 0, failed: 0 };
 
   const supabase = getSupabaseAdmin();
+  let sent = 0;
+  let failed = 0;
   for (const photo of photos) {
-    const result = await sendPageImageMessage(token, ctx.peerId, photo.url);
+    let result: Awaited<ReturnType<typeof sendPageImageMessage>>;
+    try {
+      result = await sendPageImageMessage(token, ctx.peerId, photo.url);
+      sent++;
+    } catch (err) {
+      failed++;
+      console.warn("[ai] photo send failed:", err instanceof Error ? err.message : err);
+      continue;
+    }
     const label = photo.itemName ? `📷 ${photo.itemName}` : "📷 Photo";
     await supabase.from("messenger_messages").upsert(
       {
@@ -171,22 +183,23 @@ export async function deliverQueuedPhotos(
           result,
         },
       },
-      { onConflict: "mid", ignoreDuplicates: true },
+      { onConflict: "mid" },
     );
   }
+  return { sent, failed };
 }
 
-/** If the model skipped send_photo, queue the best catalog match for this request. */
-export function queueMatchingPhotos(ctx: ModuleContext, query: string, limit = 2) {
-  const scored = rankByQuery(itemsWithPhotos(ctx), query, catalogFields).filter(
-    (r) => r.score > 0,
-  );
+/** Queue photos of every item named in this message that the model didn't send. Returns how many were added. */
+export function queueMatchingPhotos(ctx: ModuleContext, query: string): number {
   ctx.pendingPhotos ??= [];
-  for (const { item } of scored.slice(0, limit)) {
+  let added = 0;
+  for (const item of matchRequestedPhotos(itemsWithPhotos(ctx), query)) {
     if (!item.image_url) continue;
     if (ctx.pendingPhotos.some((p) => p.url === item.image_url)) continue;
     ctx.pendingPhotos.push({ url: item.image_url, itemName: item.name });
+    added++;
   }
+  return added;
 }
 
 export const MEDIA_TOOLS: ChasterTool[] = [sendPhotoTool];

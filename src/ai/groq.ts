@@ -1,5 +1,26 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { dispatchAiTool, type ModuleContext } from "@/ai/modules";
 import type { AiToolDefinition } from "@/ai/tools/types";
+
+export type LlmUsage = {
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  rate_limit_wait_ms: number;
+  models: string[];
+};
+
+const usageStore = new AsyncLocalStorage<LlmUsage>();
+
+/** Run `fn` and total every Groq call made inside it (for the audit log). */
+export function newLlmUsage(): LlmUsage {
+  return { calls: 0, prompt_tokens: 0, completion_tokens: 0, rate_limit_wait_ms: 0, models: [] };
+}
+
+/** Run `fn` with every Groq call inside it added to `usage` (for the audit log). */
+export function withLlmUsage<T>(usage: LlmUsage, fn: () => Promise<T>): Promise<T> {
+  return usageStore.run(usage, fn);
+}
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 /**
@@ -116,11 +137,21 @@ export async function callGroq(body: {
       console.warn(`[groq] ${model} rate limited, retrying in ${Math.ceil(delay / 1000)}s`);
       await sleep(delay);
       waited += delay;
+      const usage = usageStore.getStore();
+      if (usage) usage.rate_limit_wait_ms += delay;
       continue;
     }
 
     if (!res.ok) {
       throw new Error(data.error?.message ?? `Groq error ${res.status}`);
+    }
+
+    const usage = usageStore.getStore();
+    if (usage) {
+      usage.calls += 1;
+      usage.prompt_tokens += Number(data.usage?.prompt_tokens) || 0;
+      usage.completion_tokens += Number(data.usage?.completion_tokens) || 0;
+      if (!usage.models.includes(model)) usage.models.push(model);
     }
 
     const choice = data.choices?.[0] as GroqChoice | undefined;
@@ -135,6 +166,11 @@ export type ToolCallTrace = {
   /** Parsed tool result (JSON object when the tool returned one). */
   result: unknown;
   ok: boolean | null;
+  ms?: number;
+  /** Tool's own failure message when ok is false. */
+  error?: string | null;
+  /** The model wrote the call as text instead of a real tool call. */
+  from_text?: boolean;
 };
 
 function parseJsonSafe(text: string): unknown {
@@ -161,6 +197,34 @@ function parseTextToolCall(
   }
   if (!args.startsWith("{")) args = "{}";
   return { name: match[1], arguments: args };
+}
+
+async function runTraced(
+  name: string,
+  argsJson: string,
+  moduleCtx: ModuleContext,
+  trace: ToolCallTrace[],
+  fromText = false,
+): Promise<string> {
+  const started = Date.now();
+  const result = await dispatchAiTool(name, argsJson, moduleCtx);
+  const parsedArgs = parseJsonSafe(argsJson || "{}");
+  const parsedResult = parseJsonSafe(result);
+  const resultObj =
+    parsedResult && typeof parsedResult === "object" ? (parsedResult as Record<string, unknown>) : null;
+  trace.push({
+    name,
+    args: parsedArgs && typeof parsedArgs === "object" ? (parsedArgs as Record<string, unknown>) : {},
+    result: parsedResult,
+    ok: resultObj && "ok" in resultObj ? Boolean(resultObj.ok) : null,
+    ms: Date.now() - started,
+    error:
+      resultObj && resultObj.ok === false
+        ? String(resultObj.message ?? resultObj.error ?? "failed").slice(0, 200)
+        : null,
+    from_text: fromText,
+  });
+  return result;
 }
 
 export async function generateMessengerReply(input: {
@@ -208,25 +272,7 @@ export async function generateMessengerReply(input: {
           `[ai-tools] ${call.function.name}`,
           call.function.arguments?.slice?.(0, 200) ?? "",
         );
-        const result = await dispatchAiTool(
-          call.function.name,
-          call.function.arguments,
-          moduleCtx,
-        );
-        const parsedArgs = parseJsonSafe(call.function.arguments || "{}");
-        const parsedResult = parseJsonSafe(result);
-        trace.push({
-          name: call.function.name,
-          args:
-            parsedArgs && typeof parsedArgs === "object"
-              ? (parsedArgs as Record<string, unknown>)
-              : {},
-          result: parsedResult,
-          ok:
-            parsedResult && typeof parsedResult === "object" && "ok" in parsedResult
-              ? Boolean((parsedResult as { ok: unknown }).ok)
-              : null,
-        });
+        const result = await runTraced(call.function.name, call.function.arguments, moduleCtx, trace);
         messages.push({
           role: "tool",
           tool_call_id: call.id,
@@ -256,21 +302,7 @@ export async function generateMessengerReply(input: {
         ],
       });
       console.log(`[ai-tools] ${asTool.name} (from text)`, args.slice(0, 200));
-      const result = await dispatchAiTool(asTool.name, args, moduleCtx);
-      const parsedArgs = parseJsonSafe(args);
-      const parsedResult = parseJsonSafe(result);
-      trace.push({
-        name: asTool.name,
-        args:
-          parsedArgs && typeof parsedArgs === "object"
-            ? (parsedArgs as Record<string, unknown>)
-            : {},
-        result: parsedResult,
-        ok:
-          parsedResult && typeof parsedResult === "object" && "ok" in parsedResult
-            ? Boolean((parsedResult as { ok: unknown }).ok)
-            : null,
-      });
+      const result = await runTraced(asTool.name, args, moduleCtx, trace, true);
       messages.push({
         role: "tool",
         tool_call_id: `text-${round}-${asTool.name}`,

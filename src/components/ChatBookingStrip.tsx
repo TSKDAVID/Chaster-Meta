@@ -7,6 +7,8 @@ import { IconCalendar } from "@/components/icons";
 import { getSupabaseBrowser } from "@/lib/supabase/browser";
 import type { Booking, BookingMode, BookingStatus } from "@/lib/types";
 
+const BOOKING_POLL_MS = 10_000;
+
 type Props = {
   pageId: string;
   peerId: string;
@@ -109,6 +111,20 @@ export default function ChatBookingStrip({
     return () => {
       active = false;
       void supabase.removeChannel(channel);
+    };
+  }, [pageId, peerId, load]);
+
+  // Realtime can be blocked by RLS for the browser client; poll so AI edits still show up.
+  useEffect(() => {
+    if (!pageId || !peerId) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") void load({ silent: true });
+    };
+    const timer = window.setInterval(refresh, BOOKING_POLL_MS);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
     };
   }, [pageId, peerId, load]);
 

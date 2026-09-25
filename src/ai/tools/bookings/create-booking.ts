@@ -29,7 +29,7 @@ export const createBookingTool: ChasterTool = {
           },
           service_label: {
             type: "string",
-            description: "What they want (e.g. haircut)",
+            description: "What they want, in their words",
           },
           customer_name: {
             type: "string",

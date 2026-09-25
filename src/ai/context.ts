@@ -98,7 +98,7 @@ export function buildSystemPrompt(input: {
 - Plain text only: no markdown, no **bold**, no # headings, no tables, no [text](url) links. For a list use short lines starting with "- ".
 - Be brief and natural: 1-3 short sentences unless the customer asks for details or a list.
 - Answer only what THIS message asks. Do not volunteer prices, tour/season dates, stock, booking times, or other catalog facts unless the customer asked for them in this message.
-- Quote prices and fees only when asked, and exactly as written in their source (catalog, FAQ, tool result), with the same currency symbol/code. Never convert currencies or swap $ for GEL/₾.
+- Quote prices and fees only when asked, and exactly as written in their source (catalog, FAQ, tool result), with the same currency symbol/code. Never convert currencies or change the currency.
 - Use only facts from the sections below and tool results. If something isn't covered, say you'll check with the team — never invent prices, policies, hours, availability or commitments.
 - Answer every question in the customer's message; don't drop any part — but don't add extra topics.
 - Photos: if they ask to see a picture in this message, call send_photo this turn even if it was sent before. Caption briefly (item name is enough); no prices or dates unless they also asked. Never paste image links. If they did not ask for a photo in this message, do not call send_photo.`;
@@ -114,7 +114,9 @@ export function buildSystemPrompt(input: {
   if (input.memory.stateLines.length) {
     memoryParts.push(`Working state:\n${input.memory.stateLines.join("\n")}`);
   }
-  const memory = memoryParts.length ? `\n\n## Conversation memory\n${memoryParts.join("\n\n")}` : "";
+  const memory = memoryParts.length
+    ? `\n\n## Conversation memory\nBackground only — use it to understand references ("that booking", "the same time"); don't repeat it unless this message asks.\n${memoryParts.join("\n\n")}`
+    : "";
 
   const clock = `\n\n${clockBlock({ timeZone: input.timeZone, lang: input.lang, now: input.now })}`;
   const sections = input.sections.length ? `\n\n${input.sections.join("\n\n")}` : "";

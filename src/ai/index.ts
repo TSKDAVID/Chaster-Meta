@@ -7,6 +7,7 @@
  *   retrieval.ts  lexical ranking of FAQ / catalog entries
  *   memory.ts     running summary + working booking state
  *   format.ts     Messenger plain-text cleanup
+ *   audit.ts      automated per-turn audit log + follow-up signals
  *   groq.ts       LLM calls, tool-call loop, chat summaries
  *   modules/      product modules: prompt sections + entitlements
  *   tools/        callable tools, one file per tool, grouped by module
@@ -19,6 +20,7 @@ export {
   type BrainContext,
   type BrainDecision,
 } from "./brain";
+export { markAiFollowup, recordAiTurn } from "./audit";
 export {
   generateMessengerReply,
   isAiAutoReplyEnabled,

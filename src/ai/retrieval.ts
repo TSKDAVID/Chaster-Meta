@@ -59,7 +59,7 @@ function bigramDice(a: string, b: string): number {
 }
 
 /** 1 = exact, 0.8 = same stem, 0.6 = prefix match, 0.5 = close Georgian form, 0 = unrelated. */
-function tokenSimilarity(query: string, target: string): number {
+export function tokenSimilarity(query: string, target: string): number {
   if (query === target) return 1;
 
   if (GEORGIAN.test(query) && GEORGIAN.test(target)) {

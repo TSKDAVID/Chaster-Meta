@@ -1,5 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
-import { isAiAutoReplyEnabled, runAutoReply } from "@/ai";
+import { isAiAutoReplyEnabled, markAiFollowup, runAutoReply } from "@/ai";
 import { resolveAndStoreContact } from "@/lib/contacts";
 import { getMetaConfig } from "@/lib/meta";
 import { withSyncedReactionPayload } from "@/lib/message-actions";
@@ -192,6 +192,7 @@ export async function POST(request: NextRequest) {
       if (error) console.error("webhook upsert error", error.message);
 
       if (!isEcho) {
+        void markAiFollowup(pageId, customerId, "customer_replied");
         try {
           const { data: pageRow } = await supabase
             .from("messenger_pages")
@@ -229,6 +230,7 @@ export async function POST(request: NextRequest) {
               customerId,
               userText,
               platform,
+              mid: message.mid ?? null,
             });
             if (!outcome.sent && outcome.reason) {
               console.log("chaster-brain skip", outcome.reason, { pageId, customerId });

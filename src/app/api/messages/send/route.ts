@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { markAiFollowup } from "@/ai";
 import { sendPageTextMessage } from "@/lib/meta";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
@@ -86,6 +87,7 @@ export async function POST(request: NextRequest) {
     if (saveError) {
       console.error("save outgoing error", saveError.message);
     }
+    await markAiFollowup(pageId, recipientId, "desk_message");
 
     return NextResponse.json({ ok: true, result, message: saved });
   } catch (err) {

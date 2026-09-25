@@ -2,11 +2,14 @@
  * One customer message → one reply:
  * load → route → assemble prompt → answer (tools) → clean → send → remember.
  */
+import { recordAiTurn } from "@/ai/audit";
 import { buildSystemPrompt } from "@/ai/context";
 import { captionWithPhotos, toMessengerText } from "@/ai/format";
 import {
   generateMessengerReply,
   isAiAutoReplyEnabled,
+  newLlmUsage,
+  withLlmUsage,
   type ChatTurn,
   type FaqKnowledgeItem,
   type ToolCallTrace,
@@ -34,7 +37,7 @@ import {
   type ModuleContext,
   type ModuleId,
 } from "@/ai/modules";
-import { looksLikePhotoRetry, messageWantsPhoto } from "@/ai/intents";
+import { turnWantsPhoto } from "@/ai/intents";
 import { routeMessage, type Route } from "@/ai/router";
 import { deliverQueuedPhotos, queueMatchingPhotos } from "@/ai/tools/media";
 import { listCustomerBookings, loadBookingSettings } from "@/lib/booking-ops";
@@ -50,7 +53,13 @@ const MAX_REPLY_CHARS = 1900;
 const THREAD_LIMIT = 24;
 
 export type BrainDecision =
-  | { action: "skip"; reason: "ai_disabled" | "empty" | "human" | "ended" | "no_page" }
+  | {
+      action: "skip";
+      reason: "ai_disabled" | "empty" | "human" | "ended" | "no_page";
+      route?: Route;
+      toolCalls?: ToolCallTrace[];
+      guards?: string[];
+    }
   | {
       action: "reply";
       replyText: string;
@@ -58,6 +67,9 @@ export type BrainDecision =
       toolCalls: ToolCallTrace[];
       state: AiState;
       pendingPhotos: Array<{ url: string; itemName?: string }>;
+      photosAddedByFallback: number;
+      /** Deterministic safety nets that changed this reply (for the audit log). */
+      guards: string[];
     };
 
 export type BrainContext = {
@@ -218,10 +230,10 @@ function retrievalQuery(ctx: BrainContext, route: Route): string {
   return [ctx.userText, e.product, e.service, e.staff].filter(Boolean).join(" ");
 }
 
-function latestWantsPhoto(userText: string, history: ChatTurn[]): boolean {
-  if (messageWantsPhoto(userText)) return true;
-  const recent = history.slice(-4).map((t) => t.content).join("\n");
-  return looksLikePhotoRetry(userText, recent);
+/** Router decides in any language; keywords only cover the router-failed case. */
+function wantsPhotoThisTurn(route: Route, ctx: BrainContext): boolean {
+  if (route.intents) return route.intents.includes("photo");
+  return turnWantsPhoto(ctx.userText, ctx.history);
 }
 
 /** Pure decision: should Chaster auto-reply, and with what text? */
@@ -275,7 +287,8 @@ export async function decideAndGenerate(ctx: BrainContext): Promise<BrainDecisio
     businessName: ctx.businessName,
     lang: route.lang,
     timeZone: settings?.timezone ?? baseCtx.pageProfile?.timezone,
-    memory: { summary, stateLines: stateLines(state) },
+    // Booking state only on booking turns, so photo/FAQ replies don't drift into dates.
+    memory: { summary, stateLines: isBookingTurn(route.intents) ? stateLines(state) : [] },
     needsHuman: route.needs_human,
     sections,
   });
@@ -297,20 +310,35 @@ export async function decideAndGenerate(ctx: BrainContext): Promise<BrainDecisio
 
   state = applyToolResults(state, reply.toolCalls, resources);
 
-  // Only auto-attach photos when THIS message asks — never because an earlier turn did.
-  if (latestWantsPhoto(ctx.userText, ctx.history) && !(moduleCtx.pendingPhotos?.length)) {
-    const e = route.entities;
-    const photoQuery = [e.product, e.service, ctx.userText].filter(Boolean).join(" ");
-    queueMatchingPhotos(moduleCtx, photoQuery);
+  // Top up with every item named for this photo ask (the model often sends only the first).
+  // Only on photo turns, so earlier photo requests never bleed into later replies.
+  let photosAddedByFallback = 0;
+  if (wantsPhotoThisTurn(route, ctx)) {
+    const named = [...route.photo_items, route.entities.product, ctx.userText]
+      .filter(Boolean)
+      .join(" ");
+    photosAddedByFallback = queueMatchingPhotos(moduleCtx, named);
+    if (photosAddedByFallback === 0 && !moduleCtx.pendingPhotos?.length) {
+      // Bare retry ("try again"): the items were named in the previous message.
+      const previousUser = [...ctx.history].reverse().find((t) => t.role === "user")?.content;
+      if (previousUser) photosAddedByFallback = queueMatchingPhotos(moduleCtx, previousUser);
+    }
   }
 
   const photos = moduleCtx.pendingPhotos ?? [];
-  let cleaned = captionWithPhotos(toMessengerText(reply.text), photos).slice(
-    0,
-    MAX_REPLY_CHARS,
-  );
+  const formatted = toMessengerText(reply.text);
+  let cleaned = captionWithPhotos(formatted, photos).slice(0, MAX_REPLY_CHARS);
   if (!cleaned && photos[0]?.itemName) cleaned = `📷 ${photos[0].itemName}`;
-  if (!cleaned && photos.length === 0) return { action: "skip", reason: "empty" };
+
+  const guards: string[] = [];
+  if (formatted !== reply.text.trim()) guards.push("format_cleanup");
+  if (cleaned !== formatted.slice(0, MAX_REPLY_CHARS)) guards.push("caption_fix");
+  if (photosAddedByFallback > 0) guards.push("photo_fallback");
+  if (reply.toolCalls.some((c) => c.from_text)) guards.push("text_tool_call");
+
+  if (!cleaned && photos.length === 0) {
+    return { action: "skip", reason: "empty", route, toolCalls: reply.toolCalls, guards };
+  }
 
   return {
     action: "reply",
@@ -319,7 +347,37 @@ export async function decideAndGenerate(ctx: BrainContext): Promise<BrainDecisio
     toolCalls: reply.toolCalls,
     state,
     pendingPhotos: photos,
+    photosAddedByFallback,
+    guards,
   };
+}
+
+/** Customers often send 2-3 messages in a row; wait briefly so only the last one is answered. */
+const SETTLE_MS = 1500;
+const peerQueues = new Map<string, Promise<unknown>>();
+
+/** One reply at a time per conversation, in arrival order. */
+function serializePerPeer<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const previous = peerQueues.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(run);
+  peerQueues.set(key, next);
+  void next.finally(() => {
+    if (peerQueues.get(key) === next) peerQueues.delete(key);
+  });
+  return next;
+}
+
+async function newerIncomingExists(pageId: string, customerId: string, mid: string) {
+  const { data } = await getSupabaseAdmin()
+    .from("messenger_messages")
+    .select("mid")
+    .eq("page_id", pageId)
+    .eq("sender_id", customerId)
+    .eq("direction", "incoming")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data?.mid && data.mid !== mid);
 }
 
 /**
@@ -331,9 +389,85 @@ export async function runAutoReply(input: {
   customerId: string;
   userText: string;
   platform: MessagePlatform;
+  /** Incoming message id; lets a burst of messages get one reply to the latest. */
+  mid?: string | null;
 }): Promise<{ sent: boolean; reason?: string; mid?: string | null }> {
+  return serializePerPeer(`${input.pageId}:${input.customerId}`, async () => {
+    const started = Date.now();
+    const audit = {
+      pageId: input.pageId,
+      peerId: input.customerId,
+      platform: input.platform,
+      incomingMid: input.mid ?? null,
+    };
+    if (input.mid) {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+      if (await newerIncomingExists(input.pageId, input.customerId, input.mid)) {
+        await recordAiTurn({
+          ...audit,
+          outcome: "skipped",
+          skipReason: "superseded",
+          latencyMs: Date.now() - started,
+        });
+        return { sent: false, reason: "superseded" };
+      }
+    }
+
+    const usage = newLlmUsage();
+    const run: TurnRun = {};
+    try {
+      const outcome = await withLlmUsage(usage, () => replyNow(input, run));
+      await recordAiTurn({
+        ...audit,
+        outcome: outcome.sent ? "replied" : "skipped",
+        skipReason: outcome.reason ?? null,
+        replyMid: outcome.mid ?? null,
+        route: run.decision?.route ?? null,
+        toolCalls: run.decision?.toolCalls,
+        photosQueued: run.decision?.action === "reply" ? run.decision.pendingPhotos.length : 0,
+        photosSent: run.photosSent ?? 0,
+        photosAddedByFallback:
+          run.decision?.action === "reply" ? run.decision.photosAddedByFallback : 0,
+        guards: [...(run.decision?.guards ?? []), ...(run.extraGuards ?? [])],
+        replyChars: run.decision?.action === "reply" ? run.decision.replyText.length : 0,
+        usage,
+        latencyMs: Date.now() - started,
+      });
+      return outcome;
+    } catch (err) {
+      await recordAiTurn({
+        ...audit,
+        outcome: "failed",
+        error: err instanceof Error ? err.message : String(err),
+        route: run.decision?.route ?? null,
+        toolCalls: run.decision?.toolCalls,
+        usage,
+        latencyMs: Date.now() - started,
+      });
+      throw err;
+    }
+  });
+}
+
+/** Filled in while a turn runs so the audit row can describe how far it got. */
+type TurnRun = {
+  decision?: BrainDecision;
+  photosSent?: number;
+  extraGuards?: string[];
+};
+
+async function replyNow(
+  input: {
+    pageId: string;
+    customerId: string;
+    userText: string;
+    platform: MessagePlatform;
+  },
+  run: TurnRun,
+): Promise<{ sent: boolean; reason?: string; mid?: string | null }> {
   const ctx = await loadBrainContext(input);
   const decision = await decideAndGenerate(ctx);
+  run.decision = decision;
 
   if (decision.action === "skip") {
     return { sent: false, reason: decision.reason };
@@ -348,12 +482,12 @@ export async function runAutoReply(input: {
     );
   }
 
-  await deliverQueuedPhotos(
+  const delivery = await deliverQueuedPhotos(
     { ...ctx.moduleCtx, pageAccessToken: ctx.pageAccessToken },
     decision.pendingPhotos,
-  ).catch((err) =>
-    console.warn("[ai] photo send failed:", err instanceof Error ? err.message : err),
   );
+  run.photosSent = delivery.sent;
+  if (delivery.failed > 0) run.extraGuards = [`photo_send_failed:${delivery.failed}`];
 
   const supabase = getSupabaseAdmin();
   if (decision.replyText.trim()) {
@@ -379,7 +513,8 @@ export async function runAutoReply(input: {
           tools: decision.toolCalls.map((c) => ({ name: c.name, ok: c.ok })),
         },
       },
-      { onConflict: "mid", ignoreDuplicates: true },
+      // Overwrite the Meta echo if it landed first, so the row is labelled AI and keeps the trace.
+      { onConflict: "mid" },
     );
   }
 
