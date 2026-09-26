@@ -3,7 +3,7 @@
 
 create table if not exists public.messenger_operator_prefs (
   facebook_user_id text primary key,
-  theme text not null default 'slate',
+  theme text not null default 'chaster',
   default_ai_replies boolean not null default true,
   locale text not null default 'en'
     check (locale in ('en', 'ka')),

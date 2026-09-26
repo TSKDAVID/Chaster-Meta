@@ -40,10 +40,10 @@ export const metadata: Metadata = {
   description: "Operator portal for Meta Messenger & Instagram",
   icons: {
     icon: [
-      { url: "/favicon.png", type: "image/png", sizes: "48x48" },
-      { url: "/icon.png?v=3", type: "image/png", sizes: "512x512" },
+      { url: "/favicon.ico", type: "image/x-icon", sizes: "any" },
+      { url: "/brand/favicon.svg", type: "image/svg+xml" },
     ],
-    apple: [{ url: "/apple-icon.png?v=3", type: "image/png", sizes: "180x180" }],
+    apple: [{ url: "/apple-icon.png", type: "image/png", sizes: "180x180" }],
   },
 };
 
@@ -57,7 +57,7 @@ const themeBootScript = `
 (function(){
   try {
     var raw = localStorage.getItem('chaster_operator_prefs_v1');
-    var theme = 'slate';
+    var theme = 'chaster';
     var custom = null;
     if (raw) {
       var parsed = JSON.parse(raw);

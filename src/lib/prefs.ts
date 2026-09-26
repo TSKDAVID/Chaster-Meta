@@ -22,7 +22,7 @@ export type OperatorPrefs = {
 
 export const defaultPrefs: OperatorPrefs = {
   defaultAiReplies: true,
-  theme: "slate",
+  theme: "chaster",
   customColors: DEFAULT_CUSTOM_COLORS,
   locale: "en",
   showHints: true,

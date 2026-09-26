@@ -1,5 +1,6 @@
 /** Theme ids — keep in sync with prefs API + boot script. */
 export type ThemeId =
+  | "chaster"
   | "light"
   | "dark"
   | "slate"
@@ -31,11 +32,17 @@ export type ThemeOption = {
 };
 
 export const DEFAULT_CUSTOM_COLORS: CustomThemeColors = {
-  base: "#0c0a09",
-  panel: "#1c1917",
-  accent: "#f97316",
+  base: "#0D0A1B",
+  panel: "#181529",
+  accent: "#AB97FF",
 };
 export const THEMES: ThemeOption[] = [
+  {
+    id: "chaster",
+    label: "Chaster",
+    description: "Brand navy and lavender",
+    swatch: ["#0D0A1B", "#AB97FF", "#181529"],
+  },
   {
     id: "slate",
     label: "Slate",
@@ -287,7 +294,7 @@ export function applyTheme(
 ) {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
-  const id = isThemeId(theme) ? theme : "slate";
+  const id = isThemeId(theme) ? theme : "chaster";
   root.setAttribute("data-theme", id);
 
   if (id === "custom") {

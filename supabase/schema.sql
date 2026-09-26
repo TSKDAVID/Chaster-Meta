@@ -34,7 +34,7 @@ create index if not exists messenger_messages_page_created_idx
 
 create table if not exists public.messenger_operator_prefs (
   facebook_user_id text primary key,
-  theme text not null default 'slate',
+  theme text not null default 'chaster',
   default_ai_replies boolean not null default true,
   updated_at timestamptz not null default now()
 );

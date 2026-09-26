@@ -116,7 +116,20 @@ export default function Navbar({
   return (
     <header className="ch-nav">
       <div className="ch-nav-left" data-tour="brand">
-        <div className="ch-brand">{t("brand")}</div>
+        <div className="ch-brand" aria-label={t("brand")}>
+          <img
+            className="ch-brand-logo ch-brand-logo-light"
+            src="/brand/chaster-lockup-light.svg"
+            alt=""
+            aria-hidden="true"
+          />
+          <img
+            className="ch-brand-logo ch-brand-logo-dark"
+            src="/brand/chaster-lockup-dark.svg"
+            alt=""
+            aria-hidden="true"
+          />
+        </div>
       </div>
 
       <nav className="ch-nav-tabs" aria-label={t("nav.deskPages")}>

@@ -44,8 +44,48 @@
 
 /* ── Themes ───────────────────────────────────────────────────────── */
 
-/* slate · default · cool paper */
-:root,
+/* Chaster brand · default · navy and lavender */
+[data-theme="chaster"] {
+  --background: #0D0A1B;
+  --foreground: #FFFFFF;
+  --chaster-ink: #FFFFFF;
+  --chaster-muted: #9D99C2;
+  --chaster-muted-soft: color-mix(in srgb, #9D99C2 68%, #0D0A1B);
+  --chaster-panel: #181529;
+  --chaster-card: color-mix(in srgb, #181529 94%, #FFFFFF);
+  --chaster-field: color-mix(in srgb, #181529 90%, #FFFFFF);
+  --chaster-panel-soft: var(--chaster-card);
+  --chaster-chat-bg: #181529;
+  --chaster-border: color-mix(in srgb, #FFFFFF 7%, transparent);
+  --chaster-border-strong: color-mix(in srgb, #FFFFFF 13%, transparent);
+  --chaster-accent: #AB97FF;
+  --chaster-accent-on-light: #6447E1;
+  --chaster-accent-hover: color-mix(in srgb, #AB97FF 88%, #FFFFFF);
+  --chaster-on-accent: #0D0A1B;
+  --chaster-accent-soft: color-mix(in srgb, #AB97FF 16%, transparent);
+  --chaster-header: var(--chaster-panel);
+  --chaster-bubble-out: color-mix(in srgb, #181529 88%, #AB97FF);
+  --chaster-bubble-out-text: #FFFFFF;
+  --chaster-bubble-in: var(--chaster-field);
+  --chaster-bubble-in-text: #FFFFFF;
+  --chaster-bubble-in-ring: color-mix(in srgb, #FFFFFF 9%, transparent);
+  --chaster-tab-active: var(--chaster-accent-soft);
+  --chaster-inset-ring: inset 0 0 0 1px color-mix(in srgb, #FFFFFF 8%, transparent);
+  --chaster-shadow-sm: 0 1px 2px color-mix(in srgb, #000000 40%, transparent);
+  --chaster-shadow: 0 16px 40px color-mix(in srgb, #000000 45%, transparent);
+  --chaster-success-text: #7fd39a;
+  --chaster-danger-text: #f0736f;
+  --chaster-warn-text: #e3b04b;
+  --chaster-ring: color-mix(in srgb, #AB97FF 30%, transparent);
+  --chaster-rule: repeating-linear-gradient(
+    transparent,
+    transparent 27px,
+    color-mix(in srgb, #FFFFFF 4%, transparent) 28px
+  );
+}
+
+/* slate · cool paper */
+:root:not([data-theme]),
 [data-theme="slate"] {
   --background: #dfe2e8;
   --foreground: #16181d;
@@ -710,10 +750,42 @@ code {
 }
 
 .ch-brand {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--chaster-ink);
+  display: flex;
+  align-items: center;
+  height: 32px;
   line-height: 1;
+}
+
+.ch-brand-logo {
+  display: block;
+  width: 112px;
+  height: auto;
+}
+
+.ch-brand-logo-dark {
+  display: none;
+}
+
+[data-theme="dark"] .ch-brand-logo-light,
+[data-theme="chaster"] .ch-brand-logo-light,
+[data-theme="ocean"] .ch-brand-logo-light,
+[data-theme="forest"] .ch-brand-logo-light,
+[data-theme="midnight"] .ch-brand-logo-light,
+[data-theme="ember"] .ch-brand-logo-light,
+[data-theme="noir"] .ch-brand-logo-light,
+[data-theme="custom"] .ch-brand-logo-light {
+  display: none;
+}
+
+[data-theme="dark"] .ch-brand-logo-dark,
+[data-theme="chaster"] .ch-brand-logo-dark,
+[data-theme="ocean"] .ch-brand-logo-dark,
+[data-theme="forest"] .ch-brand-logo-dark,
+[data-theme="midnight"] .ch-brand-logo-dark,
+[data-theme="ember"] .ch-brand-logo-dark,
+[data-theme="noir"] .ch-brand-logo-dark,
+[data-theme="custom"] .ch-brand-logo-dark {
+  display: block;
 }
 
 .ch-nav-tabs {
